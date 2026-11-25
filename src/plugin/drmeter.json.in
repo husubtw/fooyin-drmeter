@@ -1,0 +1,10 @@
+{
+    "Name" : "DR Meter",
+    "Version" : "${PROJECT_VERSION}",
+    "Author" : "husubtw",
+    "Copyright" : "Copyright © 2026, husubtw",
+    "License" : "GPL-3.0-or-later",
+    "Category" : "Audio.Analysis",
+    "Description" : "Offline Dynamic Range (TT DR14) meter for fooyin",
+    "Url" : "https://github.com/husubtw/fooyin-drmeter"
+}

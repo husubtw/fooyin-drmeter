@@ -1,0 +1,8 @@
+build/
+build-asan/
+refs/
+.cache/
+compile_commands.json
+
+# Large local audio fixtures (keep foo_dr.txt references if needed)
+tests/fixtures/

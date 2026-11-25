@@ -1,0 +1,114 @@
+#include "plugin/drsettings.h"
+
+#include <utils/settings/settingsmanager.h>
+
+using namespace Qt::StringLiterals;
+
+namespace Fooyin::DrMeter {
+DrSettings::DrSettings(SettingsManager* settings)
+    : m_settings{settings}
+    , m_albumGroupingPattern{defaultAlbumGroupingPattern()}
+    , m_logFileName{defaultLogFileName()}
+    , m_verboseDialog{defaultVerboseDialog()}
+    , m_writeAlbumDrForSingleTrack{defaultWriteAlbumDrForSingleTrack()}
+{ }
+
+QString DrSettings::albumGroupingPattern() const
+{
+    if(m_settings) {
+        const QString val
+            = m_settings->fileValue(QLatin1StringView{SettingKeys::AlbumGroupingPattern}, defaultAlbumGroupingPattern())
+                  .toString()
+                  .trimmed();
+        if(!val.isEmpty()) {
+            return val;
+        }
+    }
+    return m_albumGroupingPattern;
+}
+
+QString DrSettings::logFileName() const
+{
+    if(m_settings) {
+        const QString val = m_settings->fileValue(QLatin1StringView{SettingKeys::LogFileName}, defaultLogFileName())
+                                .toString()
+                                .trimmed();
+        if(!val.isEmpty()) {
+            return val;
+        }
+    }
+    return m_logFileName;
+}
+
+bool DrSettings::verboseDialog() const
+{
+    if(m_settings) {
+        return m_settings->fileValue(QLatin1StringView{SettingKeys::VerboseDialog}, defaultVerboseDialog()).toBool();
+    }
+    return m_verboseDialog;
+}
+
+bool DrSettings::writeAlbumDrForSingleTrack() const
+{
+    if(m_settings) {
+        return m_settings
+            ->fileValue(QLatin1StringView{SettingKeys::WriteAlbumDrForSingleTrack}, defaultWriteAlbumDrForSingleTrack())
+            .toBool();
+    }
+    return m_writeAlbumDrForSingleTrack;
+}
+
+void DrSettings::setAlbumGroupingPattern(const QString& pattern)
+{
+    const QString trimmed  = pattern.trimmed();
+    m_albumGroupingPattern = trimmed.isEmpty() ? defaultAlbumGroupingPattern() : trimmed;
+    if(m_settings) {
+        m_settings->fileSet(QLatin1StringView{SettingKeys::AlbumGroupingPattern}, m_albumGroupingPattern);
+    }
+}
+
+void DrSettings::setLogFileName(const QString& fileName)
+{
+    const QString trimmed = fileName.trimmed();
+    m_logFileName         = trimmed.isEmpty() ? defaultLogFileName() : trimmed;
+    if(m_settings) {
+        m_settings->fileSet(QLatin1StringView{SettingKeys::LogFileName}, m_logFileName);
+    }
+}
+
+void DrSettings::setVerboseDialog(bool enabled)
+{
+    m_verboseDialog = enabled;
+    if(m_settings) {
+        m_settings->fileSet(QLatin1StringView{SettingKeys::VerboseDialog}, enabled);
+    }
+}
+
+void DrSettings::setWriteAlbumDrForSingleTrack(bool enabled)
+{
+    m_writeAlbumDrForSingleTrack = enabled;
+    if(m_settings) {
+        m_settings->fileSet(QLatin1StringView{SettingKeys::WriteAlbumDrForSingleTrack}, enabled);
+    }
+}
+
+QString DrSettings::defaultAlbumGroupingPattern()
+{
+    return u"%album artist% | %date% | %album% | %discnumber%"_s;
+}
+
+QString DrSettings::defaultLogFileName()
+{
+    return u"foo_dr.txt"_s;
+}
+
+bool DrSettings::defaultVerboseDialog() noexcept
+{
+    return true;
+}
+
+bool DrSettings::defaultWriteAlbumDrForSingleTrack() noexcept
+{
+    return true;
+}
+} // namespace Fooyin::DrMeter
