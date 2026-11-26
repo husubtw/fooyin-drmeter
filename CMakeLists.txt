@@ -8,12 +8,13 @@ project(
 )
 
 option(DRMETER_BUILD_PLUGIN "Build Fooyin plugin targets" ON)
+option(DRMETER_PACKAGE_BUNDLE "Add package_plugin target for .fyplugin bundle" OFF)
 option(BUILD_TESTING "Build unit and integration tests" OFF)
 
 include(CTest)
 
 if(DRMETER_BUILD_PLUGIN)
-    find_package(Fooyin REQUIRED)
+    find_package(Fooyin 0.15.1 REQUIRED)
 endif()
 
 add_library(
@@ -72,6 +73,7 @@ if(DRMETER_BUILD_PLUGIN)
         PUBLIC
             drmeter_core
             Fooyin::Core
+            Fooyin::Utils
     )
     set_target_properties(
         drmeter_plugin_logic
@@ -87,11 +89,13 @@ if(DRMETER_BUILD_PLUGIN)
 
     create_fooyin_plugin(
         drmeter
+        NO_INSTALL
         JSON_IN src/plugin/drmeter.json.in
         DEPENDS
             drmeter_plugin_logic
             Fooyin::Core
             Fooyin::Gui
+            Fooyin::Utils
         SOURCES
             src/plugin/drmeterplugin.cpp
             src/plugin/drmeterplugin.h
@@ -111,6 +115,28 @@ if(DRMETER_BUILD_PLUGIN)
 
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(drmeter PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    set(DRMETER_PLUGIN_INSTALL_DIR
+        "${FOOYIN_PLUGIN_INSTALL_DIR}"
+        CACHE STRING
+        "Plugin install directory relative to CMAKE_INSTALL_PREFIX"
+    )
+
+    if(NOT CMAKE_SKIP_INSTALL_RULES)
+        install(
+            TARGETS drmeter
+            RUNTIME DESTINATION "${DRMETER_PLUGIN_INSTALL_DIR}"
+            LIBRARY DESTINATION "${DRMETER_PLUGIN_INSTALL_DIR}"
+        )
+    endif()
+
+    if(DRMETER_PACKAGE_BUNDLE)
+        create_fooyin_plugin_bundle(
+            drmeter
+            NAME fooyin-drmeter
+            FILES LICENSE README.md
+        )
     endif()
 endif()
 
