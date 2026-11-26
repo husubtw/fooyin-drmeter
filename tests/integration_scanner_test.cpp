@@ -4,16 +4,19 @@
 #include "plugin/drsettings.h"
 #include "plugin/drtagwriter.h"
 
+#include <core/constants.h>
 #include <core/engine/audioinput.h>
 #include <core/engine/audioloader.h>
 #include <core/library/musiclibrary.h>
 #include <core/track.h>
+#include <utils/settings/settingsmanager.h>
 
 #include <QCoreApplication>
 #include <QDir>
 #include <QEventLoop>
 #include <QFile>
 #include <QPromise>
+#include <QTemporaryDir>
 #include <QTimer>
 
 #include <gtest/gtest.h>
@@ -800,6 +803,654 @@ TEST(DrScannerCancellationTest, StopCallbackNeverInvokesRequestAbortAfterStopSta
     QFile::remove(dummyPath);
 
     EXPECT_EQ(abortAfterStop->load(std::memory_order_acquire), 0);
+}
+
+class ZeroFrameEofDecoder final : public AudioDecoder
+{
+public:
+    [[nodiscard]] QStringList extensions() const override
+    {
+        return {u"zerotest"_s};
+    }
+    [[nodiscard]] bool isSeekable() const override
+    {
+        return false;
+    }
+
+    std::optional<AudioFormat> init(const AudioSource& /*source*/, const Track& /*track*/,
+                                    DecoderOptions /*options*/) override
+    {
+        return AudioFormat{SampleFormat::F64, 44100, 2};
+    }
+
+    void stop() override { }
+    void seek(uint64_t /*pos*/) override { }
+
+    ReadResult readAudio(size_t /*bytes*/) override
+    {
+        return ReadResult::endOfStream();
+    }
+
+    AudioBuffer readBuffer(size_t /*bytes*/) override
+    {
+        return {};
+    }
+};
+
+class PulseSyntheticDecoder final : public AudioDecoder
+{
+public:
+    explicit PulseSyntheticDecoder(int totalFrames, QString ext = u"pulsetest"_s)
+        : m_totalFrames{totalFrames}
+        , m_ext{std::move(ext)}
+    { }
+
+    [[nodiscard]] QStringList extensions() const override
+    {
+        return {m_ext};
+    }
+    [[nodiscard]] bool isSeekable() const override
+    {
+        return false;
+    }
+
+    std::optional<AudioFormat> init(const AudioSource& /*source*/, const Track& /*track*/,
+                                    DecoderOptions /*options*/) override
+    {
+        m_format  = AudioFormat{SampleFormat::F64, 44100, 2};
+        m_emitted = false;
+        return m_format;
+    }
+
+    void stop() override { }
+    void seek(uint64_t /*pos*/) override { }
+
+    ReadResult readAudio(size_t /*bytes*/) override
+    {
+        if(m_emitted) {
+            return ReadResult::endOfStream();
+        }
+        m_emitted = true;
+
+        std::vector<double> data(static_cast<size_t>(m_totalFrames) * 2U, 0.0);
+        if(m_totalFrames > 0) {
+            data[0] = 1.0;
+            data[1] = 1.0;
+        }
+        AudioBuffer buf{reinterpret_cast<const uint8_t*>(data.data()), data.size() * sizeof(double), m_format, 0ULL};
+        return ReadResult::data(std::move(buf));
+    }
+
+    AudioBuffer readBuffer(size_t bytes) override
+    {
+        auto res = readAudio(bytes);
+        return res.status == ReadStatus::DecodedAudio ? std::move(res.buffer) : AudioBuffer{};
+    }
+
+private:
+    int m_totalFrames{32};
+    QString m_ext;
+    AudioFormat m_format;
+    bool m_emitted{false};
+};
+
+class ErrorSyntheticDecoder final : public AudioDecoder
+{
+public:
+    [[nodiscard]] QStringList extensions() const override
+    {
+        return {u"errtest"_s};
+    }
+    [[nodiscard]] bool isSeekable() const override
+    {
+        return false;
+    }
+
+    std::optional<AudioFormat> init(const AudioSource& /*source*/, const Track& /*track*/,
+                                    DecoderOptions /*options*/) override
+    {
+        return AudioFormat{SampleFormat::F64, 44100, 2};
+    }
+
+    void stop() override { }
+    void seek(uint64_t /*pos*/) override { }
+
+    ReadResult readAudio(size_t /*bytes*/) override
+    {
+        return ReadResult::errorResult(u"Simulated corrupt frame"_s);
+    }
+
+    AudioBuffer readBuffer(size_t /*bytes*/) override
+    {
+        return {};
+    }
+};
+
+class CueStreamDecoder final : public AudioDecoder
+{
+public:
+    explicit CueStreamDecoder(std::shared_ptr<std::atomic<int>> seekCalls)
+        : m_seekCalls{std::move(seekCalls)}
+    { }
+
+    [[nodiscard]] QStringList extensions() const override
+    {
+        return {u"cuetest"_s};
+    }
+    [[nodiscard]] bool isSeekable() const override
+    {
+        return true;
+    }
+
+    std::optional<AudioFormat> init(const AudioSource& /*source*/, const Track& /*track*/,
+                                    DecoderOptions /*options*/) override
+    {
+        m_format = AudioFormat{SampleFormat::F64, 44100, 2};
+        m_pos    = 0;
+        return m_format;
+    }
+
+    void stop() override { }
+    void seek(uint64_t /*pos*/) override
+    {
+        if(m_seekCalls) {
+            m_seekCalls->fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    ReadResult readAudio(size_t /*bytes*/) override
+    {
+        constexpr int FramesPerSector = 588; // 44100 / 75
+        constexpr int TotalFrames     = 10 * FramesPerSector;
+        constexpr int ChunkFrames     = 1000; // intentionally crosses sector boundaries
+
+        if(m_pos >= TotalFrames) {
+            return ReadResult::endOfStream();
+        }
+
+        const int count = std::min(ChunkFrames, TotalFrames - m_pos);
+        std::vector<double> data(static_cast<size_t>(count) * 2U, 0.0);
+
+        for(int i = 0; i < count; ++i) {
+            const int frame = m_pos + i;
+            double sample   = 0.0;
+            if(frame < 2 * FramesPerSector || frame >= 6 * FramesPerSector) {
+                sample = 1.0;
+            }
+            else if(frame == 2 * FramesPerSector) {
+                sample = 0.5;
+            }
+            data[static_cast<size_t>(i) * 2U]      = sample;
+            data[static_cast<size_t>(i) * 2U + 1U] = sample;
+        }
+
+        const auto startMs = static_cast<uint64_t>(m_pos) * 1000ULL / 44100ULL;
+        m_pos += count;
+
+        AudioBuffer buf{reinterpret_cast<const uint8_t*>(data.data()), data.size() * sizeof(double), m_format, startMs};
+        return ReadResult::data(std::move(buf));
+    }
+
+    AudioBuffer readBuffer(size_t bytes) override
+    {
+        auto res = readAudio(bytes);
+        return res.status == ReadStatus::DecodedAudio ? std::move(res.buffer) : AudioBuffer{};
+    }
+
+private:
+    AudioFormat m_format;
+    int m_pos{0};
+    std::shared_ptr<std::atomic<int>> m_seekCalls;
+};
+
+class SeekableSegmentDecoder final : public AudioDecoder
+{
+public:
+    SeekableSegmentDecoder(bool seekable, QString ext, std::shared_ptr<std::atomic<int>> seekCalls,
+                           std::shared_ptr<std::atomic<uint64_t>> lastSeekMs)
+        : m_seekable{seekable}
+        , m_ext{std::move(ext)}
+        , m_seekCalls{std::move(seekCalls)}
+        , m_lastSeekMs{std::move(lastSeekMs)}
+    { }
+
+    [[nodiscard]] QStringList extensions() const override
+    {
+        return {m_ext};
+    }
+    [[nodiscard]] bool isSeekable() const override
+    {
+        return m_seekable;
+    }
+
+    std::optional<AudioFormat> init(const AudioSource& /*source*/, const Track& /*track*/,
+                                    DecoderOptions /*options*/) override
+    {
+        m_format = AudioFormat{SampleFormat::F64, 48000, 2};
+        m_pos    = 0;
+        return m_format;
+    }
+
+    void stop() override { }
+    void seek(uint64_t pos) override
+    {
+        if(m_seekCalls) {
+            m_seekCalls->fetch_add(1, std::memory_order_relaxed);
+        }
+        if(m_lastSeekMs) {
+            m_lastSeekMs->store(pos, std::memory_order_relaxed);
+        }
+        m_pos = 0;
+    }
+
+    ReadResult readAudio(size_t /*bytes*/) override
+    {
+        constexpr int TotalFrames = 48000; // 1000 ms offered
+        constexpr int ChunkFrames = 5000;  // crosses 24000-frame (500 ms) duration boundary
+
+        if(m_pos >= TotalFrames) {
+            return ReadResult::endOfStream();
+        }
+
+        const int count = std::min(ChunkFrames, TotalFrames - m_pos);
+        std::vector<double> data(static_cast<size_t>(count) * 2U, 0.0);
+
+        for(int i = 0; i < count; ++i) {
+            const int frame = m_pos + i;
+            double sample   = 0.0;
+            if(frame == 0) {
+                sample = 0.25;
+            }
+            else if(frame >= 24000) {
+                sample = 1.0;
+            }
+            data[static_cast<size_t>(i) * 2U]      = sample;
+            data[static_cast<size_t>(i) * 2U + 1U] = sample;
+        }
+
+        const auto startMs = static_cast<uint64_t>(m_pos) * 1000ULL / 48000ULL;
+        m_pos += count;
+
+        AudioBuffer buf{reinterpret_cast<const uint8_t*>(data.data()), data.size() * sizeof(double), m_format, startMs};
+        return ReadResult::data(std::move(buf));
+    }
+
+    AudioBuffer readBuffer(size_t bytes) override
+    {
+        auto res = readAudio(bytes);
+        return res.status == ReadStatus::DecodedAudio ? std::move(res.buffer) : AudioBuffer{};
+    }
+
+private:
+    bool m_seekable{true};
+    QString m_ext;
+    AudioFormat m_format;
+    int m_pos{0};
+    std::shared_ptr<std::atomic<int>> m_seekCalls;
+    std::shared_ptr<std::atomic<uint64_t>> m_lastSeekMs;
+};
+
+DrScanSummary runScanSync(const std::shared_ptr<AudioLoader>& loader, const TrackList& tracks)
+{
+    DrScanner scanner{loader};
+    DrScanSummary captured;
+    bool gotFinished = false;
+
+    QEventLoop loop;
+    QObject::connect(&scanner, &DrScanner::scanFinished, &loop, [&](const DrScanSummary& summary) {
+        captured    = summary;
+        gotFinished = true;
+        loop.quit();
+    });
+    QObject::connect(&scanner, &DrScanner::scanCancelled, &loop, &QEventLoop::quit);
+
+    scanner.startScan(tracks, DrSettings::defaultAlbumGroupingPattern());
+    QTimer::singleShot(5000, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    EXPECT_TRUE(gotFinished);
+    return captured;
+}
+
+TEST(DrScannerBehaviorTest, ZeroFrameEofFailsAndIsExcludedFromOfficialDr)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString pulsePath = tempDir.filePath(u"01.pulsetest"_s);
+    const QString zeroPath  = tempDir.filePath(u"02.zerotest"_s);
+    for(const QString& path : {pulsePath, zeroPath}) {
+        QFile f{path};
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write("dummy", 5);
+    }
+
+    auto loader = std::make_shared<AudioLoader>();
+    // 32 frames with single full-scale pulse -> DR = 10*log10(32/2) = 12.04 dB -> DR12
+    loader->addDecoder(u"PulseTest"_s, []() { return std::make_unique<PulseSyntheticDecoder>(32); });
+    loader->addDecoder(u"ZeroTest"_s, []() { return std::make_unique<ZeroFrameEofDecoder>(); });
+
+    Track t1{pulsePath};
+    t1.setAlbumArtists({u"Test Artist"_s});
+    t1.setAlbum(u"Test Album"_s);
+    t1.setTitle(u"Valid Pulse"_s);
+    t1.setTrackNumber(u"1"_s);
+
+    Track t2{zeroPath};
+    t2.setAlbumArtists({u"Test Artist"_s});
+    t2.setAlbum(u"Test Album"_s);
+    t2.setTitle(u"Empty EOF"_s);
+    t2.setTrackNumber(u"2"_s);
+
+    const DrScanSummary summary = runScanSync(loader, {t1, t2});
+    ASSERT_EQ(summary.albums.size(), 1U);
+
+    const auto& album = summary.albums.front();
+    ASSERT_EQ(album.tracks.size(), 2U);
+    EXPECT_TRUE(album.tracks[0].ok);
+    EXPECT_EQ(album.tracks[0].dr.trackDrInt, 12);
+
+    EXPECT_FALSE(album.tracks[1].ok);
+    EXPECT_EQ(album.tracks[1].error, u"No audio frames decoded"_s);
+
+    ASSERT_EQ(album.album.tracks.size(), 1U);
+    EXPECT_EQ(album.album.officialDr, 12);
+}
+
+TEST(DrScannerBehaviorTest, SlicesCueSectorBoundariesSampleAccurately)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString cueAudioPath = tempDir.filePath(u"image.cuetest"_s);
+    {
+        QFile f{cueAudioPath};
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write("dummy", 5);
+    }
+
+    auto seekCalls = std::make_shared<std::atomic<int>>(0);
+    auto loader    = std::make_shared<AudioLoader>();
+    loader->addDecoder(u"CueTest"_s, [seekCalls]() { return std::make_unique<CueStreamDecoder>(seekCalls); });
+
+    Track validCue{cueAudioPath, 1};
+    validCue.setCuePath(tempDir.filePath(u"image.cue"_s));
+    validCue.setAlbumArtists({u"Cue Artist"_s});
+    validCue.setAlbum(u"Cue Album"_s);
+    validCue.setTitle(u"Subsong One"_s);
+    validCue.setTrackNumber(u"1"_s);
+    validCue.setOffset(2667);
+    validCue.setExtraProperty(QString::fromLatin1(Constants::CueIndex01Sector), u"2"_s);
+    validCue.setExtraProperty(QString::fromLatin1(Constants::CueEndSector), u"6"_s);
+
+    Track invalidCue{cueAudioPath, 2};
+    invalidCue.setCuePath(tempDir.filePath(u"image.cue"_s));
+    invalidCue.setAlbumArtists({u"Cue Artist"_s});
+    invalidCue.setAlbum(u"Cue Album"_s);
+    invalidCue.setTitle(u"Invalid Bounds"_s);
+    invalidCue.setTrackNumber(u"2"_s);
+    invalidCue.setExtraProperty(QString::fromLatin1(Constants::CueIndex01Sector), u"6"_s);
+    invalidCue.setExtraProperty(QString::fromLatin1(Constants::CueEndSector), u"6"_s);
+
+    const DrScanSummary summary = runScanSync(loader, {validCue, invalidCue});
+    ASSERT_EQ(summary.albums.size(), 1U);
+
+    const auto& album = summary.albums.front();
+    ASSERT_EQ(album.tracks.size(), 2U);
+
+    EXPECT_TRUE(album.tracks[0].ok);
+    EXPECT_EQ(album.tracks[0].dr.totalFrames, 2352ULL); // 4 sectors * 588 frames/sector
+    EXPECT_NEAR(album.tracks[0].dr.peakDb, -6.0206, 0.01);
+    EXPECT_EQ(album.tracks[0].dr.trackDrInt, 31);
+    EXPECT_EQ(seekCalls->load(std::memory_order_relaxed), 0);
+
+    EXPECT_FALSE(album.tracks[1].ok);
+    EXPECT_EQ(album.tracks[1].error, u"Invalid CUE track boundaries"_s);
+}
+
+TEST(DrScannerBehaviorTest, SeeksAndTrimsBoundedOffsetDurationSegment)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString seekPath    = tempDir.filePath(u"chapter.seektest"_s);
+    const QString nonSeekPath = tempDir.filePath(u"chapter.nonseektest"_s);
+    for(const QString& path : {seekPath, nonSeekPath}) {
+        QFile f{path};
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write("dummy", 5);
+    }
+
+    auto seekCalls  = std::make_shared<std::atomic<int>>(0);
+    auto lastSeekMs = std::make_shared<std::atomic<uint64_t>>(0);
+
+    auto loader = std::make_shared<AudioLoader>();
+    loader->addDecoder(u"SeekTest"_s, [seekCalls, lastSeekMs]() {
+        return std::make_unique<SeekableSegmentDecoder>(true, u"seektest"_s, seekCalls, lastSeekMs);
+    });
+    loader->addDecoder(u"NonSeekTest"_s, []() {
+        return std::make_unique<SeekableSegmentDecoder>(false, u"nonseektest"_s, nullptr, nullptr);
+    });
+
+    Track seekTrack{seekPath, 1};
+    seekTrack.setCuePath(tempDir.filePath(u"chapters.cue"_s));
+    seekTrack.setAlbumArtists({u"Chapter Artist"_s});
+    seekTrack.setAlbum(u"Chapter Album"_s);
+    seekTrack.setTitle(u"Bounded Chapter"_s);
+    seekTrack.setOffset(2000);
+    seekTrack.setDuration(500);
+    ASSERT_TRUE(seekTrack.isBoundedSegment());
+
+    Track nonSeekTrack{nonSeekPath, 2};
+    nonSeekTrack.setCuePath(tempDir.filePath(u"chapters.cue"_s));
+    nonSeekTrack.setAlbumArtists({u"Chapter Artist"_s});
+    nonSeekTrack.setAlbum(u"Chapter Album"_s);
+    nonSeekTrack.setTitle(u"Unseekable Chapter"_s);
+    nonSeekTrack.setOffset(2000);
+    nonSeekTrack.setDuration(500);
+
+    const DrScanSummary summary = runScanSync(loader, {seekTrack, nonSeekTrack});
+    ASSERT_EQ(summary.albums.size(), 1U);
+
+    const auto& album = summary.albums.front();
+    ASSERT_EQ(album.tracks.size(), 2U);
+
+    EXPECT_TRUE(album.tracks[0].ok);
+    EXPECT_EQ(seekCalls->load(std::memory_order_relaxed), 1);
+    EXPECT_EQ(lastSeekMs->load(std::memory_order_relaxed), 2000ULL);
+    EXPECT_EQ(album.tracks[0].dr.totalFrames, 24000ULL); // 500 ms @ 48000 Hz
+    EXPECT_NEAR(album.tracks[0].dr.peakDb, -12.0412, 0.01);
+
+    EXPECT_FALSE(album.tracks[1].ok);
+    EXPECT_EQ(album.tracks[1].error, u"Decoder cannot seek to track segment"_s);
+}
+
+TEST(DrScannerBehaviorTest, PartialFailureAlbumAveragesOnlyValidTracks)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString track1Path = tempDir.filePath(u"01.pulse10"_s);
+    const QString track2Path = tempDir.filePath(u"02.errtest"_s);
+    const QString track3Path = tempDir.filePath(u"03.pulse14"_s);
+    for(const QString& path : {track1Path, track2Path, track3Path}) {
+        QFile f{path};
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write("dummy", 5);
+    }
+
+    auto loader = std::make_shared<AudioLoader>();
+    // 20 frames -> DR = 10*log10(20/2) = 10.00 dB; 50 frames -> DR = 10*log10(50/2) = 13.98 dB
+    loader->addDecoder(u"Pulse10"_s, []() { return std::make_unique<PulseSyntheticDecoder>(20, u"pulse10"_s); });
+    loader->addDecoder(u"ErrTest"_s, []() { return std::make_unique<ErrorSyntheticDecoder>(); });
+    loader->addDecoder(u"Pulse14"_s, []() { return std::make_unique<PulseSyntheticDecoder>(50, u"pulse14"_s); });
+
+    Track t1{track1Path};
+    t1.setAlbumArtists({u"Partial Artist"_s});
+    t1.setAlbum(u"Partial Album"_s);
+    t1.setTitle(u"First Good"_s);
+    t1.setTrackNumber(u"1"_s);
+
+    Track t2{track2Path};
+    t2.setAlbumArtists({u"Partial Artist"_s});
+    t2.setAlbum(u"Partial Album"_s);
+    t2.setTitle(u"Broken Middle"_s);
+    t2.setTrackNumber(u"2"_s);
+
+    Track t3{track3Path};
+    t3.setAlbumArtists({u"Partial Artist"_s});
+    t3.setAlbum(u"Partial Album"_s);
+    t3.setTitle(u"Last Good"_s);
+    t3.setTrackNumber(u"3"_s);
+
+    const DrScanSummary summary = runScanSync(loader, {t1, t2, t3});
+    ASSERT_EQ(summary.albums.size(), 1U);
+
+    const auto& album = summary.albums.front();
+    ASSERT_EQ(album.tracks.size(), 3U);
+    EXPECT_TRUE(album.tracks[0].ok);
+    EXPECT_EQ(album.tracks[0].dr.trackDrInt, 10);
+    EXPECT_FALSE(album.tracks[1].ok);
+    EXPECT_EQ(album.tracks[1].error, u"Simulated corrupt frame"_s);
+    EXPECT_TRUE(album.tracks[2].ok);
+    EXPECT_EQ(album.tracks[2].dr.trackDrInt, 14);
+
+    ASSERT_EQ(album.album.tracks.size(), 2U);
+    EXPECT_EQ(album.album.officialDr, 12);
+}
+
+TEST(DrScannerMetadataTest, ChannelLayoutFromAudioFormatMapsPositionsAndLfeFlags)
+{
+    using P = AudioFormat::ChannelPosition;
+
+    EXPECT_TRUE(channelLayoutFromAudioFormat(AudioFormat{}).empty());
+
+    // Fallback default layout when AudioFormat has no explicit channel layout
+    const AudioFormat stereoDefault{SampleFormat::S16, 44100, 2};
+    const auto stereoLayout = channelLayoutFromAudioFormat(stereoDefault);
+    ASSERT_EQ(stereoLayout.size(), 2U);
+    EXPECT_EQ(stereoLayout[0].label, "FL");
+    EXPECT_FALSE(stereoLayout[0].isLfe);
+    EXPECT_EQ(stereoLayout[1].label, "FR");
+    EXPECT_FALSE(stereoLayout[1].isLfe);
+
+    // Explicit layout containing both LFE and LFE2 plus UnknownPosition
+    AudioFormat customFmt{SampleFormat::F64, 48000, 8};
+    ASSERT_TRUE(customFmt.setChannelLayoutAndCount({
+        P::FrontLeft,
+        P::FrontRight,
+        P::FrontCenter,
+        P::LFE,
+        P::LFE2,
+        P::SideLeft,
+        P::SideRight,
+        P::UnknownPosition,
+    }));
+
+    const auto layout = channelLayoutFromAudioFormat(customFmt);
+    ASSERT_EQ(layout.size(), 8U);
+
+    EXPECT_EQ(layout[0].label, "FL");
+    EXPECT_FALSE(layout[0].isLfe);
+    EXPECT_EQ(layout[1].label, "FR");
+    EXPECT_FALSE(layout[1].isLfe);
+    EXPECT_EQ(layout[2].label, "FC");
+    EXPECT_FALSE(layout[2].isLfe);
+    EXPECT_EQ(layout[3].label, "LFE");
+    EXPECT_TRUE(layout[3].isLfe);
+    EXPECT_EQ(layout[4].label, "LFE2");
+    EXPECT_TRUE(layout[4].isLfe);
+    EXPECT_EQ(layout[5].label, "SL");
+    EXPECT_FALSE(layout[5].isLfe);
+    EXPECT_EQ(layout[6].label, "SR");
+    EXPECT_FALSE(layout[6].isLfe);
+    EXPECT_EQ(layout[7].label, "Ch8");
+    EXPECT_FALSE(layout[7].isLfe);
+}
+
+TEST(DrSettingsTest, DefaultsEmptyFallbacksPersistenceAndSingleTrackAlbumDrToggle)
+{
+    // Standalone (no SettingsManager) defaults and empty/whitespace fallbacks
+    DrSettings standalone;
+    EXPECT_EQ(standalone.albumGroupingPattern(), DrSettings::defaultAlbumGroupingPattern());
+    EXPECT_EQ(standalone.logFileName(), DrSettings::defaultLogFileName());
+    EXPECT_TRUE(standalone.writeAlbumDrForSingleTrack());
+
+    standalone.setAlbumGroupingPattern(u"  %album%  "_s);
+    EXPECT_EQ(standalone.albumGroupingPattern(), u"%album%"_s);
+    standalone.setAlbumGroupingPattern(u"   "_s);
+    EXPECT_EQ(standalone.albumGroupingPattern(), DrSettings::defaultAlbumGroupingPattern());
+
+    standalone.setLogFileName(u" custom_dr.txt "_s);
+    EXPECT_EQ(standalone.logFileName(), u"custom_dr.txt"_s);
+    standalone.setLogFileName(u""_s);
+    EXPECT_EQ(standalone.logFileName(), DrSettings::defaultLogFileName());
+
+    standalone.setWriteAlbumDrForSingleTrack(false);
+    EXPECT_FALSE(standalone.writeAlbumDrForSingleTrack());
+
+    // Persistence and empty-value fallback through Fooyin's SettingsManager
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    SettingsManager manager{tempDir.filePath(u"settings.conf"_s)};
+
+    DrSettings persisted{&manager};
+    EXPECT_EQ(persisted.albumGroupingPattern(), DrSettings::defaultAlbumGroupingPattern());
+    EXPECT_EQ(persisted.logFileName(), DrSettings::defaultLogFileName());
+    EXPECT_TRUE(persisted.writeAlbumDrForSingleTrack());
+
+    persisted.setAlbumGroupingPattern(u"%artist% - %album%"_s);
+    persisted.setLogFileName(u"dr_report.txt"_s);
+    persisted.setWriteAlbumDrForSingleTrack(false);
+
+    const DrSettings reloaded{&manager};
+    EXPECT_EQ(reloaded.albumGroupingPattern(), u"%artist% - %album%"_s);
+    EXPECT_EQ(reloaded.logFileName(), u"dr_report.txt"_s);
+    EXPECT_FALSE(reloaded.writeAlbumDrForSingleTrack());
+
+    // Empty/whitespace values stored directly in config must fall back to defaults
+    manager.fileSet(QLatin1StringView{SettingKeys::AlbumGroupingPattern}, u"   "_s);
+    manager.fileSet(QLatin1StringView{SettingKeys::LogFileName}, u""_s);
+    const DrSettings fallback{&manager};
+    EXPECT_EQ(fallback.albumGroupingPattern(), DrSettings::defaultAlbumGroupingPattern());
+    EXPECT_EQ(fallback.logFileName(), DrSettings::defaultLogFileName());
+
+    // Verify writeAlbumDrForSingleTrack = false suppresses ALBUM DYNAMIC RANGE only on 1-track albums
+    auto loader = std::make_shared<AudioLoader>();
+    loader->addReader(u"WritableStub"_s,
+                      []() { return std::make_unique<StubAudioReader>(QStringList{u"flac"_s}, true); });
+
+    ScannedAlbum singleTrackAlbum;
+    singleTrackAlbum.album.officialDr = 13;
+    {
+        ScannedTrack st;
+        st.track         = Track{u"/music/single.flac"_s};
+        st.dr.trackDrInt = 13;
+        st.ok            = true;
+        singleTrackAlbum.tracks.push_back(st);
+        singleTrackAlbum.album.tracks.push_back(st.dr);
+    }
+
+    const auto singlePrepared = prepareTagUpdates({singleTrackAlbum}, *loader, reloaded);
+    ASSERT_EQ(singlePrepared.tracksToWrite.size(), 1U);
+    EXPECT_EQ(singlePrepared.tracksToWrite[0].extraTag(u"DYNAMIC RANGE"_s), QStringList{u"13"_s});
+    EXPECT_TRUE(singlePrepared.tracksToWrite[0].extraTag(u"ALBUM DYNAMIC RANGE"_s).isEmpty());
+
+    ScannedAlbum multiTrackAlbum = singleTrackAlbum;
+    {
+        ScannedTrack st2;
+        st2.track         = Track{u"/music/second.flac"_s};
+        st2.dr.trackDrInt = 11;
+        st2.ok            = true;
+        multiTrackAlbum.tracks.push_back(st2);
+        multiTrackAlbum.album.tracks.push_back(st2.dr);
+        multiTrackAlbum.album.officialDr = 12;
+    }
+
+    const auto multiPrepared = prepareTagUpdates({multiTrackAlbum}, *loader, reloaded);
+    ASSERT_EQ(multiPrepared.tracksToWrite.size(), 2U);
+    EXPECT_EQ(multiPrepared.tracksToWrite[0].extraTag(u"ALBUM DYNAMIC RANGE"_s), QStringList{u"12"_s});
+    EXPECT_EQ(multiPrepared.tracksToWrite[1].extraTag(u"ALBUM DYNAMIC RANGE"_s), QStringList{u"12"_s});
 }
 } // namespace
 } // namespace Fooyin::DrMeter

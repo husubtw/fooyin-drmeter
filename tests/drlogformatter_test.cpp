@@ -249,5 +249,99 @@ TEST(DrLogFormatterTest, FormatsResultsTableWithPlainIntegerDrAndLocaleIndepende
     EXPECT_NE(log.find("-20.04 dBFS"), std::string::npos);
     EXPECT_EQ(log.find("-1,17"), std::string::npos);
 }
+
+TEST(DrLogFormatterTest, DistinguishesPositiveNegativeInfinityAndNan)
+{
+    const double posInf = std::numeric_limits<double>::infinity();
+    const double negInf = -std::numeric_limits<double>::infinity();
+    const double qNan   = std::numeric_limits<double>::quiet_NaN();
+
+    EXPECT_EQ(DrLogFormatter::formatDbValue(posInf, false), "+inf");
+    EXPECT_EQ(DrLogFormatter::formatDbValue(posInf, true), "+inf dBFS");
+    EXPECT_EQ(DrLogFormatter::formatDbValue(negInf, false), "-inf");
+    EXPECT_EQ(DrLogFormatter::formatDbValue(negInf, true), "-inf dBFS");
+    EXPECT_EQ(DrLogFormatter::formatDbValue(qNan, false), "nan");
+    EXPECT_EQ(DrLogFormatter::formatDbValue(qNan, true), "nan dBFS");
+}
+
+TEST(DrLogFormatterTest, SanitizesControlCharsAndPreservesUtf8Metadata)
+{
+    AlbumDrResult album;
+    album.albumArtist = "Art\rist\nŞğüöç\x01";
+    album.album       = "Alb\r\num\té\x1F";
+    album.officialDr  = 12;
+
+    TrackDrResult t;
+    t.trackDrInt             = 12;
+    t.trackDrFloat           = 12.0;
+    t.peakDb                 = -1.00;
+    t.rmsDb                  = -14.00;
+    t.totalFrames            = 60ULL * 44100ULL;
+    t.metadata.trackNumber   = 1;
+    t.metadata.title         = "日本語\tTitle\nLine\rEnd\x07";
+    t.metadata.codec         = "FL\tAC\n\x02";
+    t.metadata.sampleRate    = 44100;
+    t.metadata.channels      = 2;
+    t.metadata.bitsPerSample = 16;
+    t.metadata.bitrateKbps   = 800;
+    t.channels               = {
+        ChannelDrResult{"F\tL\n\x01", false, 12.00, -14.00, -1.00},
+        ChannelDrResult{"FR\rŞğüöç", false, 12.00, -14.00, -1.00},
+    };
+    album.tracks.push_back(t);
+
+    EXPECT_EQ(DrLogFormatter::formatTrackLabel(t.metadata), "01-日本語 Title Line End");
+
+    const std::string log = DrLogFormatter::formatAlbumLog(album, {.logDate = "2026-11-26 12:00:00"});
+    EXPECT_NE(log.find("Analyzed: Art ist Şğüöç / Alb um é\n"), std::string::npos);
+    EXPECT_NE(log.find(" 01-日本語 Title Line End\n"), std::string::npos);
+    EXPECT_NE(log.find("Codec:             FL AC\n"), std::string::npos);
+    EXPECT_EQ(log.find('\r'), std::string::npos);
+    EXPECT_EQ(log.find('\t'), std::string::npos);
+    EXPECT_EQ(log.find('\x01'), std::string::npos);
+    EXPECT_EQ(log.find('\x07'), std::string::npos);
+    EXPECT_EQ(log.find('\x1F'), std::string::npos);
+
+    const std::string table = DrLogFormatter::formatResultsTable(std::span<const AlbumDrResult>{&album, 1});
+    const auto lines        = splitLinesStripCr(table);
+    ASSERT_EQ(lines.size(), 2U);
+    EXPECT_EQ(lines[0],
+              "Name\tTrack DR\tAlbum DR\tDR (F L)\tDR (FR Şğüöç)\tRMS (F L)\tRMS (FR Şğüöç)\tPeak (F L)\tPeak (FR "
+              "Şğüöç)");
+    EXPECT_EQ(lines[1],
+              "01-日本語 Title Line End\t12\t12\t12.00 dB\t12.00 dB\t-14.00 dBFS\t-14.00 dBFS\t-1.00 dBFS\t-1.00 dBFS");
+}
+
+TEST(DrLogFormatterTest, ControlOnlyMetadataFallsBackCleanly)
+{
+    AlbumDrResult album;
+    album.albumArtist = "\r\n\t\x01 ";
+    album.album       = "\t\n\x1F";
+    album.officialDr  = 11;
+
+    TrackDrResult t;
+    t.trackDrInt             = 11;
+    t.trackDrFloat           = 11.0;
+    t.peakDb                 = -1.50;
+    t.rmsDb                  = -15.00;
+    t.totalFrames            = 60ULL * 44100ULL;
+    t.metadata.trackNumber   = 1;
+    t.metadata.title         = "\tTrack One\r\n";
+    t.metadata.codec         = "\n\x07\t";
+    t.metadata.sampleRate    = 44100;
+    t.metadata.channels      = 2;
+    t.metadata.bitsPerSample = 16;
+    album.tracks.push_back(t);
+
+    const std::string log = DrLogFormatter::formatAlbumLog(album, {.logDate = "2026-11-26 12:00:00"});
+    EXPECT_NE(log.find("Analyzed: Unknown Artist / Unknown Album\n"), std::string::npos);
+    EXPECT_NE(log.find(" 01-Track One\n"), std::string::npos);
+    EXPECT_EQ(log.find("Codec:"), std::string::npos);
+
+    // Control-only albumArtist with a valid album must not emit a blank artist prefix.
+    album.album                    = "  \tValid Album\n";
+    const std::string albumOnlyLog = DrLogFormatter::formatAlbumLog(album, {.logDate = "2026-11-26 12:00:00"});
+    EXPECT_NE(albumOnlyLog.find("Analyzed: Valid Album\n"), std::string::npos);
+}
 } // namespace
 } // namespace Fooyin::DrMeter

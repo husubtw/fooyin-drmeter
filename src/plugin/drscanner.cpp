@@ -424,9 +424,15 @@ void DrWorker::scanSingleItem(WorkItem& item, const std::stop_token& token)
     }
 
     if(!decodeError) {
-        item.result.dr          = analyzer.finish();
-        item.result.dr.metadata = buildTrackMetadata(item.track, srcFormat);
-        item.result.ok          = true;
+        if(analyzer.totalFrames() == 0) {
+            item.result.ok    = false;
+            item.result.error = u"No audio frames decoded"_s;
+        }
+        else {
+            item.result.dr          = analyzer.finish();
+            item.result.dr.metadata = buildTrackMetadata(item.track, srcFormat);
+            item.result.ok          = true;
+        }
     }
 
     const int done = m_completedTracks.fetch_add(1, std::memory_order_acq_rel) + 1;

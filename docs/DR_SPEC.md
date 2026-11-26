@@ -73,7 +73,8 @@ Links `drmeter_plugin_logic`, `Fooyin::Core`, `Fooyin::Gui`, and `Fooyin::Utils`
 
 ### 3.2. Edge Cases
 - **Tracks shorter than 3 seconds ($B = 1$, 0 full blocks):** Evaluate the single partial block normalized by actual frame count $N$ ($p_{(1)}$ and single-block AES17 RMS); never emit `NaN`.
-- **Silent track or silent channel:** Guard against $\log_{10}(0)$; yield `DR = 0.0` and Peak/RMS `-inf`, never `NaN`.
+- **Zero-frame decodes (`analyzer.totalFrames() == 0`):** Marked failed (`"No audio frames decoded"`) and excluded from Official Album DR, logs, and tag writes so empty/broken EOF streams cannot drag down album averages.
+- **Silent track or silent channel:** Guard against $\log_{10}(0)$; yield `DR = 0.0` and Peak/RMS `-inf`, never `NaN`. Non-finite dB values format distinctly as `+inf`, `-inf`, or `nan`.
 - **Non-finite samples:** `NaN`, `±Inf`, and finite samples whose square overflows `double` (`!std::isfinite(sample * sample)`) are skipped during accumulation in `DrAnalyzer::process()` while preserving frame counts and block boundaries, preventing `NaN` propagation and strict-weak-ordering UB in `std::ranges::sort`.
 - **Duration rounding:** Format `M:SS` using `std::llround(totalFrames / static_cast<double>(sampleRate))`.
 - **Negative zero:** Values with `-0.005 < v <= 0.0` format as `0.00 dBFS`, never `-0.00 dBFS`.
@@ -144,6 +145,7 @@ Codec:             FLAC
 - **Track label format:** Zero-padded 2-digit track number + hyphen + title (`01-Track One`); fall back to `<Title>` alone if track number is missing/zero.
 - **Bit-depth reporting (`buildTrackMetadata()`):** Lossy tracks (`track.encoding()` equal to `"Lossy"`, case-insensitive) and unprobed floating-point streams (`SampleFormat::F32`, `SampleFormat::F64`, or `SampleFormat::Unknown` with `track.bitDepth() <= 0`) set `bitsPerSample = 0`, so `foo_dr.txt` omits the `Bits per sample:` line. Non-lossy tracks use `track.bitDepth()` when `> 0`; fallback to `decodedFormat.bitdepth()` applies only to integer PCM formats (`U8`, `S16`, `S24In32`, `S32`).
 - If an album contains mixed sample rates, bit depths, or codecs, list all unique values comma-separated; report average bitrate in kbps.
+- **Metadata sanitization:** Metadata strings (`albumArtist`, `album`, `title`, `codec`, `channelLabel`) written to `foo_dr.txt` and `Copy Results` sanitize ASCII control characters (`\r`, `\n`, `\t` → single space; other bytes `< 0x20` and `0x7F` stripped via `unsigned char` comparison so UTF-8 bytes `>= 0x80` are preserved untouched) and trim resulting leading/trailing ASCII spaces.
 - For multi-album logs written to the same file/clipboard, concatenate album blocks separated by a blank line after `================================================================================`.
 
 ### 5.2. `Write Log` Behavior
@@ -181,7 +183,6 @@ Codec:             FLAC
 Settings are persisted in Fooyin's `SettingsManager` under the following keys and defaults:
 - `DrMeter/AlbumGroupingPattern`: `"%album artist% | %date% | %album% | %discnumber%"`
 - `DrMeter/LogFileName`: `"foo_dr.txt"`
-- `DrMeter/VerboseDialog`: `true`
 - `DrMeter/WriteAlbumDrForSingleTrack`: `true`
 
 Exposing these keys in Fooyin's settings UI via `GuiPluginContext::advancedSettingsRegistry` (`Tools / DR Meter`) is planned for v0.2.

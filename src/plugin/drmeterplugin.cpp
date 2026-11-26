@@ -49,9 +49,12 @@ void DrMeterPlugin::shutdown()
     m_scanCancelRequested = false;
 
     if(m_progressDialog) {
+        m_progressDialog->setAttribute(Qt::WA_DeleteOnClose, false);
         m_progressDialog->markFinished();
         m_progressDialog->close();
-        delete m_progressDialog.data();
+        if(m_progressDialog) {
+            delete m_progressDialog.data();
+        }
         m_progressDialog.clear();
     }
 
@@ -66,7 +69,11 @@ void DrMeterPlugin::shutdown()
     pruneClosedDialogs();
     for(const auto& dialog : m_openDialogs) {
         if(dialog) {
+            dialog->setAttribute(Qt::WA_DeleteOnClose, false);
             dialog->close();
+            if(dialog) {
+                delete dialog.data();
+            }
         }
     }
     m_openDialogs.clear();

@@ -10,7 +10,6 @@ namespace Fooyin::DrMeter {
 namespace SettingKeys {
 inline constexpr auto AlbumGroupingPattern       = "DrMeter/AlbumGroupingPattern";
 inline constexpr auto LogFileName                = "DrMeter/LogFileName";
-inline constexpr auto VerboseDialog              = "DrMeter/VerboseDialog";
 inline constexpr auto WriteAlbumDrForSingleTrack = "DrMeter/WriteAlbumDrForSingleTrack";
 } // namespace SettingKeys
 
@@ -21,24 +20,20 @@ public:
 
     [[nodiscard]] QString albumGroupingPattern() const;
     [[nodiscard]] QString logFileName() const;
-    [[nodiscard]] bool verboseDialog() const;
     [[nodiscard]] bool writeAlbumDrForSingleTrack() const;
 
     void setAlbumGroupingPattern(const QString& pattern);
     void setLogFileName(const QString& fileName);
-    void setVerboseDialog(bool enabled);
     void setWriteAlbumDrForSingleTrack(bool enabled);
 
     [[nodiscard]] static QString defaultAlbumGroupingPattern();
     [[nodiscard]] static QString defaultLogFileName();
-    [[nodiscard]] static bool defaultVerboseDialog() noexcept;
     [[nodiscard]] static bool defaultWriteAlbumDrForSingleTrack() noexcept;
 
 private:
     SettingsManager* m_settings{nullptr};
     QString m_albumGroupingPattern;
     QString m_logFileName;
-    bool m_verboseDialog{true};
     bool m_writeAlbumDrForSingleTrack{true};
 };
 } // namespace Fooyin::DrMeter

@@ -30,6 +30,19 @@ jobs:
         run: |
           ctest --preset dev --output-on-failure
 
+      - name: Configure, build, and test (asan preset)
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          cmake --preset asan
+          cmake --build --preset asan
+          ctest --preset asan --output-on-failure
+
+      - name: Run clang-tidy
+        run: |
+          clang-tidy -p build --warnings-as-errors='*' src/core/*.cpp src/plugin/*.cpp
+
       - name: Verify standalone core build and tests
         run: |
           cmake -B build-core -G Ninja -DDRMETER_BUILD_PLUGIN=OFF -DBUILD_TESTING=ON

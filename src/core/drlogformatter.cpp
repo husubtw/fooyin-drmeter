@@ -35,22 +35,56 @@ std::string joinStrings(const std::vector<std::string>& items, std::string_view 
 
 std::string formatNumericDb(double db)
 {
-    if(!std::isfinite(db)) {
-        return "-inf";
+    if(std::isnan(db)) {
+        return "nan";
+    }
+    if(std::isinf(db)) {
+        return std::signbit(db) ? "-inf" : "+inf";
     }
     return std::format("{:.2f}", clampNegativeZero(db));
 }
 
+std::string sanitizeMetadataText(std::string_view input)
+{
+    std::string out;
+    out.reserve(input.size());
+    for(size_t i = 0; i < input.size(); ++i) {
+        const char c  = input[i];
+        const auto uc = static_cast<unsigned char>(c);
+        if(c == '\r' || c == '\n' || c == '\t') {
+            if(c == '\r' && i + 1U < input.size() && input[i + 1U] == '\n') {
+                ++i;
+            }
+            out.push_back(' ');
+        }
+        else if(uc < 0x20U || uc == 0x7FU) {
+            continue;
+        }
+        else {
+            out.push_back(c);
+        }
+    }
+
+    const size_t first = out.find_first_not_of(' ');
+    if(first == std::string::npos) {
+        return {};
+    }
+    const size_t last = out.find_last_not_of(' ');
+    return out.substr(first, last - first + 1U);
+}
+
 std::string formatAnalyzedLine(const AlbumDrResult& album)
 {
-    if(!album.albumArtist.empty() && !album.album.empty()) {
-        return std::format("Analyzed: {} / {}", album.albumArtist, album.album);
+    const std::string artist = sanitizeMetadataText(album.albumArtist);
+    const std::string title  = sanitizeMetadataText(album.album);
+    if(!artist.empty() && !title.empty()) {
+        return std::format("Analyzed: {} / {}", artist, title);
     }
-    if(!album.albumArtist.empty()) {
-        return std::format("Analyzed: {}", album.albumArtist);
+    if(!artist.empty()) {
+        return std::format("Analyzed: {}", artist);
     }
-    if(!album.album.empty()) {
-        return std::format("Analyzed: {}", album.album);
+    if(!title.empty()) {
+        return std::format("Analyzed: {}", title);
     }
     return "Analyzed: Unknown Artist / Unknown Album";
 }
@@ -75,10 +109,11 @@ std::string DrLogFormatter::formatDbValue(double db, bool withUnit)
 
 std::string DrLogFormatter::formatTrackLabel(const TrackMetadata& metadata)
 {
+    std::string title = sanitizeMetadataText(metadata.title);
     if(metadata.trackNumber > 0) {
-        return std::format("{:02d}-{}", metadata.trackNumber, metadata.title);
+        return std::format("{:02d}-{}", metadata.trackNumber, title);
     }
-    return metadata.title;
+    return title;
 }
 
 std::string DrLogFormatter::formatAlbumLog(const AlbumDrResult& album, const LogFormatOptions& options)
@@ -130,7 +165,10 @@ std::string DrLogFormatter::formatAlbumLog(const AlbumDrResult& album, const Log
             ++bitrateCount;
         }
         if(!track.metadata.codec.empty()) {
-            appendUnique(codecs, track.metadata.codec);
+            const std::string codec = sanitizeMetadataText(track.metadata.codec);
+            if(!codec.empty()) {
+                appendUnique(codecs, codec);
+            }
         }
     }
 
@@ -182,7 +220,7 @@ std::string DrLogFormatter::formatResultsTable(std::span<const AlbumDrResult> al
     for(const auto& album : albums) {
         for(const auto& track : album.tracks) {
             for(const auto& ch : track.channels) {
-                appendUnique(channelLabels, ch.channelLabel);
+                appendUnique(channelLabels, sanitizeMetadataText(ch.channelLabel));
             }
         }
     }
@@ -204,8 +242,9 @@ std::string DrLogFormatter::formatResultsTable(std::span<const AlbumDrResult> al
             out += std::format("{}\t{}\t{}", formatTrackLabel(track.metadata), track.trackDrInt, album.officialDr);
 
             const auto findChannel = [&track](const std::string& label) -> const ChannelDrResult* {
-                const auto it = std::ranges::find_if(
-                    track.channels, [&label](const ChannelDrResult& ch) { return ch.channelLabel == label; });
+                const auto it = std::ranges::find_if(track.channels, [&label](const ChannelDrResult& ch) {
+                    return sanitizeMetadataText(ch.channelLabel) == label;
+                });
                 return it != track.channels.end() ? &(*it) : nullptr;
             };
 
