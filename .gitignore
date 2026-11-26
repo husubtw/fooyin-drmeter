@@ -3,5 +3,4 @@ build-*/
 refs/
 .cache/
 compile_commands.json
-repomix-output.xml
 tests/fixtures/
