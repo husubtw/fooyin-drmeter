@@ -4,6 +4,8 @@
 
 Offline Dynamic Range (`TT DR14`) scanner plugin for [Fooyin](https://github.com/fooyin/fooyin) `0.15.1`. Measurement behavior, 80-column `foo_dr.txt` log layout, and results dialog columns follow foobar2000's `foo_dr_meter v1.0.8`.
 
+![DR Meter Results](docs/example_dr_table.png)
+
 ## Features
 
 - Per-track and Official Album TT DR14 measurement grouped by album tags (falling back to directory path when untagged).
