@@ -208,7 +208,7 @@ TEST(DrLogFormatterTest, FormatsTrackLabelsMixedMetadataAndMultiAlbumConcatenati
     const std::vector<AlbumDrResult> twoAlbums{mixed, makeExampleAlbum()};
     const std::string multiLog = DrLogFormatter::formatMultiAlbumLog(twoAlbums, {.logDate = "2026-11-25 12:00:00"});
     const std::string sep      = "================================================================================\n\n"
-                                 "fooyin 0.15.1 / DR Meter v0.1.1\n";
+                                 "fooyin 0.15.1 / DR Meter v0.1.2\n";
     EXPECT_NE(multiLog.find(sep), std::string::npos);
 }
 

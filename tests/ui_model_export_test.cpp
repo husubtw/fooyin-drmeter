@@ -214,7 +214,7 @@ TEST(DrLogExporterTest, GroupsMultiAlbumByDirectoryConcatenatesAndDetectsOverwri
     const QDateTime fixedTime      = QDateTime::fromString(u"2026-11-25 18:45:38"_s, u"yyyy-MM-dd HH:mm:ss"_s);
     const LogFormatOptions options = DrLogExporter::buildLogFormatOptions(fixedTime);
     EXPECT_EQ(options.logDate, "2026-11-25 18:45:38");
-    EXPECT_EQ(options.pluginVersion, "0.1.1");
+    EXPECT_EQ(options.pluginVersion, "0.1.2");
     EXPECT_FALSE(options.fooyinVersion.empty());
 
     const auto targets = DrLogExporter::planDirectoryLogWrites(allAlbums, u"foo_dr.txt"_s, options);

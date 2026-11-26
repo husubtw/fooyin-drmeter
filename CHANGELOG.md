@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-26
+
+### Added
+- Expanded integration and unit tests covering CUE sector slicing (`_CUE_INDEX01_SECTOR` / `_CUE_END_SECTOR`), bounded `offset + duration` seeking, 0-frame EOF failure exclusion, partial-failure album DR averaging, `channelLayoutFromAudioFormat()` (`LFE`/`LFE2`), `DrSettings` defaults/fallbacks/`writeAlbumDrForSingleTrack`, and UTF-8-safe log/TSV sanitization.
+- Strict ASan/UBSan (`ASAN_OPTIONS=detect_leaks=0`, `UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1`) and `clang-tidy --warnings-as-errors='*'` gates in the Arch Linux CI job.
+- Example `foo_dr.txt` log (`docs/foo_dr_example.txt`), collapsible log preview, badges, and quick-reference build/install table in `README.md`.
+
+### Changed
+- Removed unused `DrMeter/VerboseDialog` setting (`SettingKeys::VerboseDialog` and `DrSettings` accessors) and synced `docs/DR_SPEC.md` accordingly.
+- Updated `.github/ISSUE_TEMPLATE/bug_report.yml` (`fooyin-drmeter` name and `Fedora 45` example).
+
+### Fixed
+- `DrScanner`: mark 0-frame EOF decodes (`analyzer.totalFrames() == 0`) as failed (`"No audio frames decoded"`) so empty/broken streams are excluded from Official Album DR, logs, and tag writes.
+- `DrMeterPlugin`: clear `Qt::WA_DeleteOnClose` before closing and synchronously delete surviving `DrResultsDialog` and `DrProgressDialog` instances in `shutdown()`.
+- `DrLogFormatter`: distinguish `+inf`, `-inf`, and `nan` in `formatNumericDb()`, sanitize ASCII control characters (`\r`/`\n`/`\t` → space, strip `< 0x20` / `0x7F` via `unsigned char` so UTF-8 bytes are preserved), and trim leading/trailing ASCII spaces on metadata strings so control-only values fall back cleanly.
+
 ## [0.1.1] - 2026-11-26
 
 ### Added
@@ -37,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-threaded offline `DrScanner` supporting standard lossless/lossy PCM, sample-exact CUE subsong slicing, and DSF/DSD64 decoding via Fooyin's `AudioLoader`.
 - `DrResultsDialog`, `DrProgressDialog`, multi-album directory log export (`DrLogExporter`), and safe `DYNAMIC RANGE` / `ALBUM DYNAMIC RANGE` tag writing (`DrTagWriter`).
 
-[Unreleased]: https://github.com/husubtw/fooyin-drmeter/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/husubtw/fooyin-drmeter/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/husubtw/fooyin-drmeter/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/husubtw/fooyin-drmeter/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/husubtw/fooyin-drmeter/releases/tag/v0.1.0

@@ -9,7 +9,7 @@ namespace Fooyin::DrMeter {
 struct LogFormatOptions
 {
     std::string fooyinVersion{"0.15.1"};
-    std::string pluginVersion{"0.1.1"};
+    std::string pluginVersion{"0.1.2"};
     std::string logDate;
 };
 
