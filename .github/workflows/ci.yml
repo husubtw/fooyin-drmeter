@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm --needed cmake ninja gtest fooyin clang
+
+      - name: Configure and build (dev preset)
+        run: |
+          cmake --preset dev
+          cmake --build --preset dev
+
+      - name: Run unit and integration tests
+        run: |
+          ctest --preset dev --output-on-failure
+
+      - name: Verify standalone core build and tests
+        run: |
+          cmake -B build-core -G Ninja -DDRMETER_BUILD_PLUGIN=OFF -DBUILD_TESTING=ON
+          cmake --build build-core
+          ctest --test-dir build-core --output-on-failure
+
+      - name: Check code formatting
+        run: |
+          find src tests -type f \( -name '*.h' -o -name '*.cpp' \) -exec clang-format --dry-run --Werror {} +
+
+      - name: Verify drmeter_core isolation
+        run: |
+          if nm -u build/libdrmeter_core.a | grep -iE 'fooyin|qt|qstring|avcodec|avformat'; then
+            echo "ERROR: Forbidden dependency found in libdrmeter_core.a"
+            exit 1
+          fi

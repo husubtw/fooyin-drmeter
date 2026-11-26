@@ -7,9 +7,14 @@ project(
     LANGUAGES CXX
 )
 
+option(DRMETER_BUILD_PLUGIN "Build Fooyin plugin targets" ON)
+option(BUILD_TESTING "Build unit and integration tests" OFF)
+
 include(CTest)
 
-find_package(Fooyin REQUIRED)
+if(DRMETER_BUILD_PLUGIN)
+    find_package(Fooyin REQUIRED)
+endif()
 
 add_library(
     drmeter_core
@@ -34,77 +39,79 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(drmeter_core PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-add_library(
-    drmeter_plugin_logic
-    STATIC
-        src/plugin/dralbumgrouper.cpp
-        src/plugin/dralbumgrouper.h
-        src/plugin/drlogexporter.cpp
-        src/plugin/drlogexporter.h
-        src/plugin/drresultsmodel.cpp
-        src/plugin/drresultsmodel.h
-        src/plugin/drscanner.cpp
-        src/plugin/drscanner.h
-        src/plugin/drsettings.cpp
-        src/plugin/drsettings.h
-        src/plugin/drtagwriter.cpp
-        src/plugin/drtagwriter.h
-)
-
-target_compile_features(drmeter_plugin_logic PUBLIC cxx_std_23)
-target_include_directories(drmeter_plugin_logic PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_compile_definitions(
-    drmeter_plugin_logic
-    PUBLIC
-        QT_USE_QSTRINGBUILDER
-    PRIVATE
-        FOOYIN_SDK_VERSION="${Fooyin_VERSION}"
-        DRMETER_PLUGIN_VERSION="${PROJECT_VERSION}"
-)
-target_link_libraries(
-    drmeter_plugin_logic
-    PUBLIC
-        drmeter_core
-        Fooyin::Core
-)
-set_target_properties(
-    drmeter_plugin_logic
-    PROPERTIES
-        AUTOMOC ON
-        CXX_EXTENSIONS OFF
-        POSITION_INDEPENDENT_CODE ON
-)
-
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(drmeter_plugin_logic PRIVATE -Wall -Wextra -Wpedantic)
-endif()
-
-create_fooyin_plugin(
-    drmeter
-    JSON_IN src/plugin/drmeter.json.in
-    DEPENDS
+if(DRMETER_BUILD_PLUGIN)
+    add_library(
         drmeter_plugin_logic
-        Fooyin::Core
-        Fooyin::Gui
-    SOURCES
-        src/plugin/drmeterplugin.cpp
-        src/plugin/drmeterplugin.h
-        src/plugin/drprogressdialog.cpp
-        src/plugin/drprogressdialog.h
-        src/plugin/drresultsdialog.cpp
-        src/plugin/drresultsdialog.h
-)
+        STATIC
+            src/plugin/dralbumgrouper.cpp
+            src/plugin/dralbumgrouper.h
+            src/plugin/drlogexporter.cpp
+            src/plugin/drlogexporter.h
+            src/plugin/drresultsmodel.cpp
+            src/plugin/drresultsmodel.h
+            src/plugin/drscanner.cpp
+            src/plugin/drscanner.h
+            src/plugin/drsettings.cpp
+            src/plugin/drsettings.h
+            src/plugin/drtagwriter.cpp
+            src/plugin/drtagwriter.h
+    )
 
-target_compile_features(drmeter PRIVATE cxx_std_23)
-set_target_properties(
-    drmeter
-    PROPERTIES
-        CXX_EXTENSIONS OFF
-        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
-)
+    target_compile_features(drmeter_plugin_logic PUBLIC cxx_std_23)
+    target_include_directories(drmeter_plugin_logic PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_compile_definitions(
+        drmeter_plugin_logic
+        PUBLIC
+            QT_USE_QSTRINGBUILDER
+        PRIVATE
+            FOOYIN_SDK_VERSION="${Fooyin_VERSION}"
+            DRMETER_PLUGIN_VERSION="${PROJECT_VERSION}"
+    )
+    target_link_libraries(
+        drmeter_plugin_logic
+        PUBLIC
+            drmeter_core
+            Fooyin::Core
+    )
+    set_target_properties(
+        drmeter_plugin_logic
+        PROPERTIES
+            AUTOMOC ON
+            CXX_EXTENSIONS OFF
+            POSITION_INDEPENDENT_CODE ON
+    )
 
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(drmeter PRIVATE -Wall -Wextra -Wpedantic)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(drmeter_plugin_logic PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    create_fooyin_plugin(
+        drmeter
+        JSON_IN src/plugin/drmeter.json.in
+        DEPENDS
+            drmeter_plugin_logic
+            Fooyin::Core
+            Fooyin::Gui
+        SOURCES
+            src/plugin/drmeterplugin.cpp
+            src/plugin/drmeterplugin.h
+            src/plugin/drprogressdialog.cpp
+            src/plugin/drprogressdialog.h
+            src/plugin/drresultsdialog.cpp
+            src/plugin/drresultsdialog.h
+    )
+
+    target_compile_features(drmeter PRIVATE cxx_std_23)
+    set_target_properties(
+        drmeter
+        PROPERTIES
+            CXX_EXTENSIONS OFF
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    )
+
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(drmeter PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
 endif()
 
 if(BUILD_TESTING)
@@ -127,18 +134,20 @@ if(BUILD_TESTING)
 
     gtest_discover_tests(drmeter_core_tests)
 
-    add_executable(
-        drmeter_integration_tests
-        tests/integration_scanner_test.cpp
-        tests/ui_model_export_test.cpp
-    )
-    target_link_libraries(drmeter_integration_tests PRIVATE drmeter_plugin_logic GTest::gtest)
-    target_compile_features(drmeter_integration_tests PRIVATE cxx_std_23)
-    set_target_properties(drmeter_integration_tests PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
+    if(DRMETER_BUILD_PLUGIN)
+        add_executable(
+            drmeter_integration_tests
+            tests/integration_scanner_test.cpp
+            tests/ui_model_export_test.cpp
+        )
+        target_link_libraries(drmeter_integration_tests PRIVATE drmeter_plugin_logic GTest::gtest)
+        target_compile_features(drmeter_integration_tests PRIVATE cxx_std_23)
+        set_target_properties(drmeter_integration_tests PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
 
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(drmeter_integration_tests PRIVATE -Wall -Wextra -Wpedantic)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_options(drmeter_integration_tests PRIVATE -Wall -Wextra -Wpedantic)
+        endif()
+
+        gtest_discover_tests(drmeter_integration_tests)
     endif()
-
-    gtest_discover_tests(drmeter_integration_tests)
 endif()

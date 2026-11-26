@@ -1,0 +1,44 @@
+name: Bug Report
+description: Report a bug or crash in fooyin-plugin-drmeter
+labels: ["bug"]
+body:
+  - type: input
+    id: fooyin-version
+    attributes:
+      label: Fooyin version
+      placeholder: e.g. 0.15.1
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS / Distribution
+      placeholder: e.g. Arch Linux, Fedora 42, Ubuntu 24.04
+    validations:
+      required: true
+
+  - type: input
+    id: audio-format
+    attributes:
+      label: Audio format(s)
+      placeholder: e.g. 16-bit/44.1kHz FLAC, FLAC+CUE, DSF (DSD64), MP3, Opus
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Clear steps to trigger the issue, including expected vs actual behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / crash output
+      description: Relevant terminal output, backtrace, or foo_dr.txt snippet (if applicable).
+      render: text
+    validations:
+      required: false

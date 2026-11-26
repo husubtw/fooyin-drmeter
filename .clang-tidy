@@ -1,0 +1,32 @@
+---
+Checks: >
+  -*,
+  bugprone-*,
+  performance-*,
+  modernize-*,
+  misc-*,
+  readability-*,
+  google-explicit-constructor,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-suspicious-include,
+  -misc-const-correctness,
+  -misc-include-cleaner,
+  -misc-multiple-inheritance,
+  -misc-non-private-member-variables-in-classes,
+  -misc-override-with-different-visibility,
+  -misc-use-internal-linkage,
+  -modernize-use-auto,
+  -modernize-use-designated-initializers,
+  -modernize-use-trailing-return-type,
+  -readability-function-cognitive-complexity,
+  -readability-identifier-length,
+  -readability-implicit-bool-conversion,
+  -readability-magic-numbers,
+  -readability-make-member-function-const,
+  -readability-use-std-min-max
+
+HeaderFilterRegex: '(^|/)src/.*'
+
+RemovedArgs:
+  - '-mno-direct-extern-access'
+...
