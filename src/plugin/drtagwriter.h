@@ -63,6 +63,7 @@ private:
     std::shared_ptr<AudioLoader> m_audioLoader;
     WriteRequest m_activeRequest;
     std::unique_ptr<QFutureWatcher<WriteResult>> m_watcher;
+    int m_pendingWriteCount{0};
     int m_pendingSkipped{0};
     bool m_running{false};
 };

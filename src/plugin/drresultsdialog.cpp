@@ -183,8 +183,11 @@ void DrResultsDialog::closeEvent(QCloseEvent* event)
 
 void DrResultsDialog::cancelPendingTagWrite()
 {
-    if(m_tagWriter && m_tagWriter->isRunning()) {
-        m_tagWriter->cancel();
+    if(m_tagWriter) {
+        m_tagWriter->disconnect(this);
+        if(m_tagWriter->isRunning()) {
+            m_tagWriter->cancel();
+        }
     }
 }
 

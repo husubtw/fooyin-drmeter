@@ -1,3 +1,4 @@
+#include "core/drlogformatter.h"
 #include "plugin/dralbumgrouper.h"
 #include "plugin/drscanner.h"
 #include "plugin/drsettings.h"
@@ -141,6 +142,10 @@ public:
         lastWrittenTracks = tracks;
         cancelCalled      = false;
 
+        if(returnInvalidRequest) {
+            return {};
+        }
+
         auto promise = std::make_shared<QPromise<WriteResult>>();
         promise->start();
         auto future = promise->future();
@@ -163,17 +168,19 @@ public:
 
         WriteRequest req;
         req.finished = future;
-        req.cancel   = [this, promise]() {
-            cancelCalled = true;
-            if(!promise->future().isFinished()) {
-                promise->addResult(WriteResult{
-                    .state     = WriteState::Cancelled,
-                    .succeeded = 0,
-                    .failed    = 0,
-                });
-                promise->finish();
-            }
-        };
+        if(!omitCancelCallback) {
+            req.cancel = [this, promise]() {
+                cancelCalled = true;
+                if(!promise->future().isFinished()) {
+                    promise->addResult(WriteResult{
+                        .state     = WriteState::Cancelled,
+                        .succeeded = 0,
+                        .failed    = 0,
+                    });
+                    promise->finish();
+                }
+            };
+        }
         return req;
     }
 
@@ -199,6 +206,8 @@ public:
     int writeCallCount{0};
     int simulatedFailedCount{0};
     bool deferCompletion{false};
+    bool returnInvalidRequest{false};
+    bool omitCancelCallback{false};
     bool cancelCalled{false};
     TrackList lastWrittenTracks;
     std::shared_ptr<QPromise<WriteResult>> pendingPromise;
@@ -268,6 +277,85 @@ private:
     AudioFormat m_format;
     int m_chunks{0};
     std::shared_ptr<std::atomic<int>> m_readsCompleted;
+};
+
+class FastSyntheticDecoder final : public AudioDecoder
+{
+public:
+    FastSyntheticDecoder(std::shared_ptr<std::atomic<int>> stopsCompleted,
+                         std::shared_ptr<std::atomic<int>> abortAfterStop, int stopDelayMs = 0)
+        : m_stopsCompleted{std::move(stopsCompleted)}
+        , m_abortAfterStop{std::move(abortAfterStop)}
+        , m_stopDelayMs{stopDelayMs}
+    { }
+
+    [[nodiscard]] QStringList extensions() const override
+    {
+        return {u"fasttest"_s};
+    }
+    [[nodiscard]] bool isSeekable() const override
+    {
+        return false;
+    }
+
+    std::optional<AudioFormat> init(const AudioSource& /*source*/, const Track& /*track*/,
+                                    DecoderOptions /*options*/) override
+    {
+        m_format  = AudioFormat{SampleFormat::F64, 48000, 2};
+        m_emitted = false;
+        m_stopStarted.store(false, std::memory_order_release);
+        return m_format;
+    }
+
+    void stop() override
+    {
+        m_stopStarted.store(true, std::memory_order_release);
+        if(m_stopDelayMs > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{m_stopDelayMs});
+        }
+        if(m_stopsCompleted) {
+            m_stopsCompleted->fetch_add(1, std::memory_order_acq_rel);
+        }
+    }
+
+    void seek(uint64_t /*pos*/) override { }
+
+    ReadResult readAudio(size_t /*bytes*/) override
+    {
+        if(abortToken().stop_requested()) {
+            return ReadResult::errorResult(u"Aborted"_s);
+        }
+        if(m_emitted) {
+            return ReadResult::endOfStream();
+        }
+        m_emitted            = true;
+        constexpr int frames = 4800;
+        std::vector<double> data(static_cast<size_t>(frames) * 2U, 0.25);
+        AudioBuffer buf{reinterpret_cast<const uint8_t*>(data.data()), data.size() * sizeof(double), m_format, 0ULL};
+        return ReadResult::data(std::move(buf));
+    }
+
+    AudioBuffer readBuffer(size_t bytes) override
+    {
+        auto res = readAudio(bytes);
+        return res.status == ReadStatus::DecodedAudio ? std::move(res.buffer) : AudioBuffer{};
+    }
+
+protected:
+    void interruptRead() override
+    {
+        if(m_stopStarted.load(std::memory_order_acquire) && m_abortAfterStop) {
+            m_abortAfterStop->fetch_add(1, std::memory_order_acq_rel);
+        }
+    }
+
+private:
+    AudioFormat m_format;
+    bool m_emitted{false};
+    std::atomic<bool> m_stopStarted{false};
+    std::shared_ptr<std::atomic<int>> m_stopsCompleted;
+    std::shared_ptr<std::atomic<int>> m_abortAfterStop;
+    int m_stopDelayMs{0};
 };
 
 TEST(DrAlbumGrouperTest, GroupsByScriptPatternDiscNumberAndFallsBackToDirectory)
@@ -472,6 +560,246 @@ TEST(DrScannerCancellationTest, CooperativeStopTokenCancelsPromptlyAndJoinsClean
     EXPECT_TRUE(cancelledEmitted);
     EXPECT_FALSE(finishedEmitted);
     EXPECT_LT(elapsedMs, 2000);
+}
+
+TEST(DrTagWriterTest, InvalidWriteRequestReportsFailureAndCancelSuppressesLateFinished)
+{
+    auto loader = std::make_shared<AudioLoader>();
+    loader->addReader(u"WritableStub"_s,
+                      []() { return std::make_unique<StubAudioReader>(QStringList{u"flac"_s}, true); });
+
+    Track writableFlac{u"/music/01.flac"_s};
+    writableFlac.setTitle(u"Track One"_s);
+
+    Track externalCue{u"/music/image.flac"_s, 1};
+    externalCue.setCuePath(u"/music/image.cue"_s);
+
+    ScannedAlbum album;
+    album.album.officialDr = 12;
+    {
+        ScannedTrack st1;
+        st1.track         = writableFlac;
+        st1.dr.trackDrInt = 12;
+        st1.ok            = true;
+        album.tracks.push_back(st1);
+
+        ScannedTrack st2;
+        st2.track         = externalCue;
+        st2.dr.trackDrInt = 12;
+        st2.ok            = true;
+        album.tracks.push_back(st2);
+    }
+
+    // Bug #1: invalid QFuture from writeTrackMetadata must report failure, never false success.
+    FakeMusicLibrary library;
+    library.returnInvalidRequest = true;
+
+    DrTagWriter writer{&library, loader};
+    int finishedCount{0};
+    DrTagWriteSummary captured;
+    QObject::connect(&writer, &DrTagWriter::finished, [&](const DrTagWriteSummary& summary) {
+        ++finishedCount;
+        captured = summary;
+    });
+
+    writer.writeTags({album});
+    EXPECT_EQ(finishedCount, 1);
+    EXPECT_EQ(captured.updated, 0);
+    EXPECT_EQ(captured.failed, 1);
+    EXPECT_EQ(captured.skipped, 1);
+    EXPECT_FALSE(captured.cancelled);
+
+    // Bug #2a: cancel() with empty WriteRequest::cancel callback (like Fooyin's completedWriteRequest)
+    // must disconnect m_watcher so the queued completion cannot trigger finished() later.
+    library.returnInvalidRequest = false;
+    library.omitCancelCallback   = true;
+    finishedCount                = 0;
+
+    writer.writeTags({album});
+    EXPECT_TRUE(writer.isRunning());
+    writer.cancel();
+    EXPECT_FALSE(writer.isRunning());
+
+    QEventLoop waitLoop;
+    QTimer::singleShot(40, &waitLoop, &QEventLoop::quit);
+    waitLoop.exec();
+    EXPECT_EQ(finishedCount, 0);
+
+    // Bug #2b: promise finishes with WriteState::Completed while QFutureWatcher::finished is queued,
+    // then cancel() is called before the event loop dispatches it -> finished() must NOT fire.
+    library.omitCancelCallback = false;
+    library.deferCompletion    = true;
+    finishedCount              = 0;
+
+    writer.writeTags({album});
+    ASSERT_NE(library.pendingPromise, nullptr);
+    library.pendingPromise->addResult(WriteResult{.state = WriteState::Completed, .succeeded = 1, .failed = 0});
+    library.pendingPromise->finish();
+    writer.cancel();
+
+    QEventLoop raceLoop;
+    QTimer::singleShot(20, &raceLoop, &QEventLoop::quit);
+    raceLoop.exec();
+    EXPECT_EQ(finishedCount, 0);
+}
+
+TEST(DrScannerMetadataTest, OmitsBitDepthForLossyAndUnprobedFloatTracks)
+{
+    const AudioFormat f32Format{SampleFormat::F32, 44100, 2};
+    const AudioFormat s16Format{SampleFormat::S16, 44100, 2};
+    const AudioFormat s24Format{SampleFormat::S24In32, 96000, 2};
+
+    // MP3 / Opus / Ogg Vorbis from TagLibReader: bitDepth == -1, encoding == "Lossy", decoded as F32.
+    Track mp3Track{u"/music/01.mp3"_s};
+    mp3Track.setTitle(u"Lossy Track"_s);
+    mp3Track.setTrackNumber(u"1"_s);
+    mp3Track.setCodec(u"MP3"_s);
+    mp3Track.setEncoding(u"Lossy"_s);
+    mp3Track.setBitrate(320);
+
+    const TrackMetadata mp3Meta = buildTrackMetadata(mp3Track, f32Format);
+    EXPECT_EQ(mp3Meta.bitsPerSample, 0);
+
+    AlbumDrResult lossyAlbum;
+    lossyAlbum.albumArtist = "Artist";
+    lossyAlbum.album       = "MP3 Album";
+    lossyAlbum.officialDr  = 11;
+    TrackDrResult mp3Dr;
+    mp3Dr.trackDrInt  = 11;
+    mp3Dr.peakDb      = -0.5;
+    mp3Dr.rmsDb       = -14.0;
+    mp3Dr.totalFrames = 44100ULL * 180ULL;
+    mp3Dr.metadata    = mp3Meta;
+    lossyAlbum.tracks.push_back(mp3Dr);
+
+    const std::string log = DrLogFormatter::formatAlbumLog(lossyAlbum, {.logDate = "2026-11-26 12:00:00"});
+    EXPECT_EQ(log.find("Bits per sample:"), std::string::npos);
+
+    // Lossy track probed by FFmpegReader (bitDepth populated as 32, encoding == "Lossy") -> still 0.
+    Track ffmpegLossy{u"/music/02.opus"_s};
+    ffmpegLossy.setEncoding(u"Lossy"_s);
+    ffmpegLossy.setBitDepth(32);
+    EXPECT_EQ(buildTrackMetadata(ffmpegLossy, f32Format).bitsPerSample, 0);
+
+    // Un-probed F32 track (bitDepth == -1, empty encoding) -> 0 (never fabricate 32-bit).
+    Track unprobedFloat{u"/music/03.ogg"_s};
+    EXPECT_EQ(buildTrackMetadata(unprobedFloat, f32Format).bitsPerSample, 0);
+
+    // Lossless FLAC (16-bit), DSF (1-bit), 32-bit float WAV, and un-probed 24-bit integer PCM.
+    Track flacTrack{u"/music/04.flac"_s};
+    flacTrack.setEncoding(u"Lossless"_s);
+    flacTrack.setBitDepth(16);
+    EXPECT_EQ(buildTrackMetadata(flacTrack, s16Format).bitsPerSample, 16);
+
+    Track dsfTrack{u"/music/05.dsf"_s};
+    dsfTrack.setEncoding(u"Lossless"_s);
+    dsfTrack.setBitDepth(1);
+    EXPECT_EQ(buildTrackMetadata(dsfTrack, f32Format).bitsPerSample, 1);
+
+    Track floatWavTrack{u"/music/06.wav"_s};
+    floatWavTrack.setEncoding(u"Lossless"_s);
+    floatWavTrack.setBitDepth(32);
+    EXPECT_EQ(buildTrackMetadata(floatWavTrack, f32Format).bitsPerSample, 32);
+
+    Track unprobedInt24{u"/music/07.flac"_s};
+    EXPECT_EQ(buildTrackMetadata(unprobedInt24, s24Format).bitsPerSample, 24);
+}
+
+TEST(DrScannerCancellationTest, QueuedFinishAfterCancelEmitsCancelledNotFinished)
+{
+    auto stopsCompleted = std::make_shared<std::atomic<int>>(0);
+    auto abortAfterStop = std::make_shared<std::atomic<int>>(0);
+    auto loader         = std::make_shared<AudioLoader>();
+    loader->addDecoder(u"FastTest"_s, [stopsCompleted, abortAfterStop]() {
+        return std::make_unique<FastSyntheticDecoder>(stopsCompleted, abortAfterStop);
+    });
+
+    const QString dummyPath = QDir::temp().absoluteFilePath(u"fooyin_drmeter_race_test.fasttest"_s);
+    {
+        QFile f{dummyPath};
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write("dummy", 5);
+    }
+
+    TrackList tracks;
+    for(int i = 0; i < 2; ++i) {
+        Track t{dummyPath};
+        t.setTitle(u"Fast Track %1"_s.arg(i + 1));
+        tracks.push_back(std::move(t));
+    }
+
+    DrScanner scanner{loader};
+    bool finishedEmitted  = false;
+    bool cancelledEmitted = false;
+
+    QEventLoop loop;
+    QObject::connect(&scanner, &DrScanner::scanFinished, &loop, [&]() {
+        finishedEmitted = true;
+        loop.quit();
+    });
+    QObject::connect(&scanner, &DrScanner::scanCancelled, &loop, [&]() {
+        cancelledEmitted = true;
+        loop.quit();
+    });
+
+    scanner.startScan(tracks, DrSettings::defaultAlbumGroupingPattern());
+
+    // Wait while the main event loop is NOT spinning so DrWorker::finishScan() completes and queues
+    // DrWorker::scanFinished onto the main thread before we invoke scanner.cancel().
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+    while(stopsCompleted->load(std::memory_order_acquire) < 2 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    ASSERT_EQ(stopsCompleted->load(std::memory_order_acquire), 2);
+    std::this_thread::sleep_for(std::chrono::milliseconds{50});
+
+    scanner.cancel();
+
+    QTimer::singleShot(2000, &loop, &QEventLoop::quit);
+    loop.exec();
+    scanner.waitForFinished();
+
+    QFile::remove(dummyPath);
+
+    EXPECT_TRUE(cancelledEmitted);
+    EXPECT_FALSE(finishedEmitted);
+    EXPECT_EQ(abortAfterStop->load(std::memory_order_acquire), 0);
+}
+
+TEST(DrScannerCancellationTest, StopCallbackNeverInvokesRequestAbortAfterStopStarts)
+{
+    auto stopsCompleted = std::make_shared<std::atomic<int>>(0);
+    auto abortAfterStop = std::make_shared<std::atomic<int>>(0);
+    auto loader         = std::make_shared<AudioLoader>();
+    loader->addDecoder(u"FastTest"_s, [stopsCompleted, abortAfterStop]() {
+        return std::make_unique<FastSyntheticDecoder>(stopsCompleted, abortAfterStop, /*stopDelayMs=*/3);
+    });
+
+    const QString dummyPath = QDir::temp().absoluteFilePath(u"fooyin_drmeter_stop_order_test.fasttest"_s);
+    {
+        QFile f{dummyPath};
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write("dummy", 5);
+    }
+
+    TrackList tracks;
+    for(int i = 0; i < 4; ++i) {
+        Track t{dummyPath};
+        t.setTitle(u"Stop Order Track %1"_s.arg(i + 1));
+        tracks.push_back(std::move(t));
+    }
+
+    for(int iter = 0; iter < 15; ++iter) {
+        DrScanner scanner{loader};
+        scanner.startScan(tracks, DrSettings::defaultAlbumGroupingPattern());
+        std::this_thread::sleep_for(std::chrono::milliseconds{iter % 5});
+        scanner.cancel();
+        scanner.waitForFinished();
+    }
+
+    QFile::remove(dummyPath);
+
+    EXPECT_EQ(abortAfterStop->load(std::memory_order_acquire), 0);
 }
 } // namespace
 } // namespace Fooyin::DrMeter

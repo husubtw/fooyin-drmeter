@@ -48,6 +48,7 @@ struct DrScanSummary
 
 [[nodiscard]] std::vector<ChannelInfo> channelLayoutFromAudioFormat(const AudioFormat& format);
 [[nodiscard]] int parseTrackNumber(const QString& raw);
+[[nodiscard]] TrackMetadata buildTrackMetadata(const Track& track, const AudioFormat& decodedFormat);
 
 class DrWorker : public Worker
 {
@@ -108,6 +109,8 @@ Q_SIGNALS:
 private:
     QThread m_scanThread;
     std::unique_ptr<DrWorker> m_worker;
+    bool m_cancelled{false};
+    bool m_terminalEmitted{false};
 };
 } // namespace Fooyin::DrMeter
 

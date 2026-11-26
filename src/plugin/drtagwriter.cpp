@@ -69,9 +69,6 @@ DrTagWriter::DrTagWriter(MusicLibrary* library, std::shared_ptr<AudioLoader> aud
 
 DrTagWriter::~DrTagWriter()
 {
-    if(m_watcher) {
-        m_watcher->disconnect(this);
-    }
     cancel();
     m_watcher.reset();
 }
@@ -96,13 +93,14 @@ void DrTagWriter::writeTags(const std::vector<ScannedAlbum>& albums, const DrSet
     }
 
     const DrTagPrepareResult prepared = prepareTagUpdates(albums, *m_audioLoader, settings);
+    m_pendingWriteCount               = static_cast<int>(prepared.tracksToWrite.size());
     m_pendingSkipped                  = prepared.skippedCount;
 
     if(prepared.tracksToWrite.empty() || !m_library) {
         DrTagWriteSummary summary;
         summary.skipped = prepared.skippedCount;
         if(!m_library) {
-            summary.failed = static_cast<int>(prepared.tracksToWrite.size());
+            summary.failed = m_pendingWriteCount;
         }
         Q_EMIT finished(summary);
         return;
@@ -112,9 +110,10 @@ void DrTagWriter::writeTags(const std::vector<ScannedAlbum>& albums, const DrSet
     m_activeRequest = m_library->writeTrackMetadata(prepared.tracksToWrite);
 
     if(!m_activeRequest.finished.isValid()) {
-        m_running = false;
+        m_running       = false;
+        m_activeRequest = {};
         DrTagWriteSummary summary;
-        summary.updated = static_cast<int>(prepared.tracksToWrite.size());
+        summary.failed  = m_pendingWriteCount;
         summary.skipped = m_pendingSkipped;
         Q_EMIT finished(summary);
         return;
@@ -130,10 +129,15 @@ void DrTagWriter::writeTags(const std::vector<ScannedAlbum>& albums, const DrSet
         summary.skipped = m_pendingSkipped;
 
         if(m_watcher && !m_watcher->isCanceled()) {
-            const WriteResult res = m_watcher->result();
-            summary.updated       = res.succeeded;
-            summary.failed        = res.failed;
-            summary.cancelled     = (res.state == WriteState::Cancelled);
+            if(m_watcher->future().resultCount() > 0) {
+                const WriteResult res = m_watcher->result();
+                summary.updated       = res.succeeded;
+                summary.failed        = res.failed;
+                summary.cancelled     = (res.state == WriteState::Cancelled);
+            }
+            else {
+                summary.failed = m_pendingWriteCount;
+            }
         }
         else {
             summary.cancelled = true;
@@ -148,6 +152,9 @@ void DrTagWriter::writeTags(const std::vector<ScannedAlbum>& albums, const DrSet
 
 void DrTagWriter::cancel()
 {
+    if(m_watcher) {
+        m_watcher->disconnect(this);
+    }
     if(m_running && m_activeRequest.cancel) {
         m_activeRequest.cancel();
     }

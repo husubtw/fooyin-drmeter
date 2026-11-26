@@ -54,6 +54,7 @@ private:
 
     QPointer<DrScanner> m_activeScanner;
     QPointer<DrProgressDialog> m_progressDialog;
+    bool m_scanCancelRequested{false};
     std::vector<QPointer<DrResultsDialog>> m_openDialogs;
 };
 } // namespace Fooyin::DrMeter

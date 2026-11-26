@@ -125,8 +125,11 @@ void DrAnalyzer::process(std::span<const double> interleaved, size_t frameCount)
             const size_t base = (frameIdx + f) * chCount;
             for(size_t ch = 0; ch < chCount; ++ch) {
                 const double sample = interleaved[base + ch];
-                const double absVal = std::abs(sample);
                 const double sqVal  = sample * sample;
+                if(!std::isfinite(sqVal)) {
+                    continue;
+                }
+                const double absVal = std::abs(sample);
 
                 m_totalSumSq[ch] += sqVal;
                 if(absVal > m_totalPeak[ch]) {

@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <limits>
 #include <numbers>
 #include <vector>
 
@@ -301,6 +302,76 @@ TEST(DrAnalyzerTest, OfficialAlbumDrAveragesUnroundedTrackDrFloats)
 
     // Rounded ints average to 12.25 -> 12, whereas unrounded floats average to 12.70 -> 13.
     EXPECT_EQ(AlbumDrResult::computeOfficialDr(tracks), 13);
+}
+
+TEST(DrAnalyzerTest, NonFiniteSamplesAreIgnoredWithoutNaNOrSortUB)
+{
+    constexpr uint32_t sampleRate = 48000;
+    DrAnalyzer cleanAnalyzer{sampleRate, 2};
+    const size_t blockFrames     = cleanAnalyzer.blockFrames();
+    constexpr size_t numBlocks   = 24U; // >16 blocks so std::ranges::sort exercises introsort partitioning
+    constexpr size_t pulseFrames = 7210U;
+    const size_t totalFrames     = blockFrames * numBlocks;
+
+    std::vector<double> cleanPcm(totalFrames * 2U, 0.0);
+    for(size_t b = 0; b < numBlocks; ++b) {
+        const double amp   = (b == 0) ? 0.9 : (b <= 5 ? 0.5 : 0.1);
+        const size_t count = (b == 0) ? 100U : pulseFrames;
+        const size_t start = b * blockFrames;
+        for(size_t f = 0; f < count; ++f) {
+            cleanPcm[(start + f) * 2U]      = amp;
+            cleanPcm[(start + f) * 2U + 1U] = amp;
+        }
+    }
+
+    cleanAnalyzer.process(cleanPcm, totalFrames);
+    const TrackDrResult cleanRes = cleanAnalyzer.finish();
+
+    std::vector<double> dirtyPcm = cleanPcm;
+    const double nanVal          = std::numeric_limits<double>::quiet_NaN();
+    const double posInf          = std::numeric_limits<double>::infinity();
+    const double negInf          = -std::numeric_limits<double>::infinity();
+
+    for(size_t b = 0; b < numBlocks; ++b) {
+        const size_t tailFrame = b * blockFrames + blockFrames - 3U;
+        if(b % 3U == 0U) {
+            dirtyPcm[tailFrame * 2U]      = nanVal;
+            dirtyPcm[tailFrame * 2U + 1U] = nanVal;
+        }
+        else if(b % 3U == 1U) {
+            dirtyPcm[tailFrame * 2U]      = posInf;
+            dirtyPcm[tailFrame * 2U + 1U] = negInf;
+        }
+        else {
+            dirtyPcm[tailFrame * 2U]      = 1e200; // finite sample whose square overflows to +Inf
+            dirtyPcm[tailFrame * 2U + 1U] = -1e200;
+        }
+    }
+
+    DrAnalyzer dirtyAnalyzer{sampleRate, 2};
+    dirtyAnalyzer.process(dirtyPcm, totalFrames);
+    const TrackDrResult dirtyRes = dirtyAnalyzer.finish();
+
+    EXPECT_EQ(dirtyRes.totalFrames, totalFrames);
+    EXPECT_TRUE(std::isfinite(dirtyRes.peakDb));
+    EXPECT_TRUE(std::isfinite(dirtyRes.rmsDb));
+    EXPECT_TRUE(std::isfinite(dirtyRes.trackDrFloat));
+    EXPECT_EQ(dirtyRes.trackDrInt, cleanRes.trackDrInt);
+    EXPECT_NEAR(dirtyRes.trackDrFloat, cleanRes.trackDrFloat, 1e-12);
+    EXPECT_NEAR(dirtyRes.peakDb, cleanRes.peakDb, 1e-12);
+    EXPECT_NEAR(dirtyRes.rmsDb, cleanRes.rmsDb, 1e-12);
+
+    std::vector<double> allNonFinite(blockFrames * 20U * 2U, nanVal);
+    allNonFinite[0] = posInf;
+    allNonFinite[1] = negInf;
+    DrAnalyzer allBadAnalyzer{sampleRate, 2};
+    allBadAnalyzer.process(allNonFinite, blockFrames * 20U);
+    const TrackDrResult allBadRes = allBadAnalyzer.finish();
+
+    EXPECT_EQ(allBadRes.trackDrInt, 0);
+    EXPECT_DOUBLE_EQ(allBadRes.trackDrFloat, 0.0);
+    EXPECT_TRUE(std::isinf(allBadRes.peakDb) && allBadRes.peakDb < 0.0);
+    EXPECT_TRUE(std::isinf(allBadRes.rmsDb) && allBadRes.rmsDb < 0.0);
 }
 } // namespace
 } // namespace Fooyin::DrMeter

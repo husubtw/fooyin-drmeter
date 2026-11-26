@@ -125,20 +125,44 @@ bool isLfePosition(AudioFormat::ChannelPosition pos)
 {
     return pos == AudioFormat::ChannelPosition::LFE || pos == AudioFormat::ChannelPosition::LFE2;
 }
+} // namespace
 
 TrackMetadata buildTrackMetadata(const Track& track, const AudioFormat& decodedFormat)
 {
     TrackMetadata meta;
-    meta.trackNumber   = parseTrackNumber(track.trackNumber());
-    meta.title         = track.effectiveTitle().toStdString();
-    meta.codec         = track.codec().toStdString();
-    meta.sampleRate    = static_cast<uint32_t>(std::max(0, decodedFormat.sampleRate()));
-    meta.channels      = static_cast<uint32_t>(std::max(0, decodedFormat.channelCount()));
-    meta.bitsPerSample = track.bitDepth() > 0 ? track.bitDepth() : decodedFormat.bitdepth();
-    meta.bitrateKbps   = std::max(0, track.bitrate());
+    meta.trackNumber = parseTrackNumber(track.trackNumber());
+    meta.title       = track.effectiveTitle().toStdString();
+    meta.codec       = track.codec().toStdString();
+    meta.sampleRate  = static_cast<uint32_t>(std::max(0, decodedFormat.sampleRate()));
+    meta.channels    = static_cast<uint32_t>(std::max(0, decodedFormat.channelCount()));
+
+    const bool isLossy = track.encoding().compare(u"Lossy"_s, Qt::CaseInsensitive) == 0;
+    if(isLossy) {
+        meta.bitsPerSample = 0;
+    }
+    else if(track.bitDepth() > 0) {
+        meta.bitsPerSample = track.bitDepth();
+    }
+    else {
+        switch(decodedFormat.sampleFormat()) {
+            case SampleFormat::U8:
+            case SampleFormat::S16:
+            case SampleFormat::S24In32:
+            case SampleFormat::S32:
+                meta.bitsPerSample = decodedFormat.bitdepth();
+                break;
+            case SampleFormat::F32:
+            case SampleFormat::F64:
+            case SampleFormat::Unknown:
+            default:
+                meta.bitsPerSample = 0;
+                break;
+        }
+    }
+
+    meta.bitrateKbps = std::max(0, track.bitrate());
     return meta;
 }
-} // namespace
 
 std::vector<ChannelInfo> channelLayoutFromAudioFormat(const AudioFormat& format)
 {
@@ -298,10 +322,9 @@ void DrWorker::scanSingleItem(WorkItem& item, const std::stop_token& token)
     AudioFormat f64Format       = srcFormat;
     f64Format.setSampleFormat(SampleFormat::F64);
 
-    const std::stop_callback stopCallback{token, [decoder] { decoder->requestAbort(); }};
-
     decoder->start();
     const ScopeGuard stopGuard{[decoder] { decoder->stop(); }};
+    const std::stop_callback stopCallback{token, [decoder] { decoder->requestAbort(); }};
 
     const auto cueStartSector = cueSectorProperty(item.track, Constants::CueIndex01Sector);
     const auto cueEndSector   = cueSectorProperty(item.track, Constants::CueEndSector);
@@ -470,9 +493,30 @@ DrScanner::DrScanner(std::shared_ptr<AudioLoader> audioLoader, QObject* parent)
     m_worker->moveToThread(&m_scanThread);
     m_scanThread.start();
 
-    QObject::connect(m_worker.get(), &DrWorker::progressChanged, this, &DrScanner::progressChanged);
-    QObject::connect(m_worker.get(), &DrWorker::scanFinished, this, &DrScanner::scanFinished);
-    QObject::connect(m_worker.get(), &DrWorker::scanCancelled, this, &DrScanner::scanCancelled);
+    QObject::connect(m_worker.get(), &DrWorker::progressChanged, this,
+                     [this](int completed, int total, const QString& currentTrack) {
+                         if(!m_cancelled && !m_terminalEmitted) {
+                             Q_EMIT progressChanged(completed, total, currentTrack);
+                         }
+                     });
+    QObject::connect(m_worker.get(), &DrWorker::scanFinished, this, [this](const DrScanSummary& summary) {
+        if(m_terminalEmitted) {
+            return;
+        }
+        m_terminalEmitted = true;
+        if(m_cancelled) {
+            Q_EMIT scanCancelled();
+            return;
+        }
+        Q_EMIT scanFinished(summary);
+    });
+    QObject::connect(m_worker.get(), &DrWorker::scanCancelled, this, [this] {
+        if(m_terminalEmitted) {
+            return;
+        }
+        m_terminalEmitted = true;
+        Q_EMIT scanCancelled();
+    });
     QObject::connect(m_worker.get(), &DrWorker::closed, &m_scanThread, &QThread::quit, Qt::DirectConnection);
 }
 
@@ -484,6 +528,8 @@ DrScanner::~DrScanner()
 
 void DrScanner::startScan(const TrackList& tracks, const QString& groupingPattern)
 {
+    m_cancelled       = false;
+    m_terminalEmitted = false;
     QMetaObject::invokeMethod(m_worker.get(), [this, tracks, groupingPattern, token = m_worker->prepareWork()] {
         m_worker->scan(tracks, groupingPattern, token);
     });
@@ -491,6 +537,7 @@ void DrScanner::startScan(const TrackList& tracks, const QString& groupingPatter
 
 void DrScanner::cancel()
 {
+    m_cancelled = true;
     if(m_worker && !m_worker->closing()) {
         m_worker->closeThread();
     }

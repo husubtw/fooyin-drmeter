@@ -46,6 +46,8 @@ void DrMeterPlugin::initialise(const GuiPluginContext& context)
 
 void DrMeterPlugin::shutdown()
 {
+    m_scanCancelRequested = false;
+
     if(m_progressDialog) {
         m_progressDialog->markFinished();
         m_progressDialog->close();
@@ -131,18 +133,25 @@ void DrMeterPlugin::startDynamicRangeScan()
 
     auto* scanner = new DrScanner(m_audioLoader, this);
 
-    m_progressDialog = progress;
-    m_activeScanner  = scanner;
+    m_scanCancelRequested = false;
+    m_progressDialog      = progress;
+    m_activeScanner       = scanner;
 
     QObject::connect(scanner, &DrScanner::progressChanged, progress, &DrProgressDialog::setProgress);
 
-    QObject::connect(progress, &DrProgressDialog::cancelRequested, scanner, &DrScanner::cancel);
+    QObject::connect(progress, &DrProgressDialog::cancelRequested, this, [this] {
+        m_scanCancelRequested = true;
+        if(m_activeScanner) {
+            m_activeScanner->cancel();
+        }
+    });
 
     QObject::connect(scanner, &DrScanner::scanCancelled, this, [this] { cleanupActiveScan(); });
 
     QObject::connect(scanner, &DrScanner::scanFinished, this, [this](const DrScanSummary& summary) {
+        const bool cancelRequested = m_scanCancelRequested;
         cleanupActiveScan();
-        if(summary.cancelled) {
+        if(summary.cancelled || cancelRequested) {
             return;
         }
 
@@ -160,6 +169,8 @@ void DrMeterPlugin::startDynamicRangeScan()
 
 void DrMeterPlugin::cleanupActiveScan()
 {
+    m_scanCancelRequested = false;
+
     if(m_progressDialog) {
         m_progressDialog->markFinished();
         m_progressDialog->close();
