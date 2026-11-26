@@ -1,10 +1,14 @@
 # fooyin-drmeter
 
 [![CI](https://github.com/husubtw/fooyin-drmeter/actions/workflows/ci.yml/badge.svg)](https://github.com/husubtw/fooyin-drmeter/actions/workflows/ci.yml)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
+[![Fooyin 0.15.1](https://img.shields.io/badge/Fooyin-0.15.1-blue.svg)](https://github.com/fooyin/fooyin)
 
-Offline Dynamic Range (`TT DR14`) scanner plugin for [Fooyin](https://github.com/fooyin/fooyin) `0.15.1`. Measurement behavior, 80-column `foo_dr.txt` log layout, and results dialog columns follow foobar2000's `foo_dr_meter v1.0.8`.
+Offline Dynamic Range (`TT DR14`) scanner plugin for [Fooyin](https://github.com/fooyin/fooyin) `0.15.1`. Measurement behavior, results dialog columns, and 80-column `foo_dr.txt` logs follow foobar2000's `foo_dr_meter v1.0.8` for compatibility with `dr.loudness-war.info`.
 
 ![DR Meter Results](docs/example_dr_table.png)
+
+*DR Meter Results scanning Kimiko Ishizaka's Open Goldberg Variations (CC0, 24-bit/96 kHz FLAC) in Fooyin 0.15.1 — see [docs/foo_dr_example.txt](docs/foo_dr_example.txt) for the full log output.*
 
 ## Features
 
@@ -16,6 +20,50 @@ Offline Dynamic Range (`TT DR14`) scanner plugin for [Fooyin](https://github.com
 
 Technical details and math definitions are documented in [docs/DR_SPEC.md](docs/DR_SPEC.md).
 
+<details>
+<summary>Example foo_dr.txt output</summary>
+
+```text
+fooyin 0.15.1 / DR Meter v0.1.1
+log date: 2026-11-26 20:14:13
+
+--------------------------------------------------------------------------------
+Analyzed: Kimiko Ishizaka / J.S. Bach: "Open" Goldberg Variations, BWV 988 (Piano)
+--------------------------------------------------------------------------------
+
+DR         Peak           RMS       Duration Track
+--------------------------------------------------------------------------------
+DR13      -8.55 dBFS   -26.57 dBFS      5:00 01-Aria
+DR12      -0.43 dBFS   -16.81 dBFS      1:55 02-Variatio 1 a 1 Clav.
+DR11      -7.25 dBFS   -22.58 dBFS      2:04 03-Variatio 2 a 1 Clav.
+DR11      -3.01 dBFS   -19.43 dBFS      1:57 04-Variatio 3 a 1 Clav. Canone all Unisuono
+DR12      -1.68 dBFS   -17.87 dBFS      1:09 05-Variatio 4 a 1 Clav.
+DR12      -2.25 dBFS   -17.67 dBFS      1:34 06-Variatio 5 a 1 ovvero 2 Clav.
+DR12      -5.62 dBFS   -23.12 dBFS      1:38 07-Variatio 6 a 1 Clav. Canone alla Seconda
+DR13      -5.13 dBFS   -24.07 dBFS      2:12 08-Variatio 7 a 1 ovvero 2 Clav.
+DR11      -2.14 dBFS   -16.76 dBFS      1:57 09-Variatio 8 a 2 Clav.
+DR11      -8.02 dBFS   -23.41 dBFS      2:06 10-Variatio 9 a 1 Clav. Canone alla Terza
+DR12      -2.75 dBFS   -19.44 dBFS      1:46 11-Variatio 10 a 1 Clav. Fughetta
+DR12      -3.92 dBFS   -18.99 dBFS      2:09 12-Variatio 11 a 2 Clav.
+DR11      -3.43 dBFS   -18.12 dBFS      2:16 13-Variatio 12 Canone alla Quarta
+DR11      -8.58 dBFS   -24.20 dBFS      4:14 14-Variatio 13 a 2 Clav.
+--------------------------------------------------------------------------------
+
+Number of tracks:  14
+Official DR value: DR12
+
+Samplerate:        96000 Hz
+Channels:          2
+Bits per sample:   24
+Bitrate:           2179 kbps
+Codec:             FLAC
+================================================================================
+```
+
+Raw file: [docs/foo_dr_example.txt](docs/foo_dr_example.txt)
+
+</details>
+
 ## Compatibility & Requirements
 
 - **Tested platforms:** Linux with Fooyin `0.15.1` (Arch Linux, Fedora 45, and Ubuntu 24.04 via the official Fooyin Linux SDK).
@@ -24,6 +72,13 @@ Technical details and math definitions are documented in [docs/DR_SPEC.md](docs/
 - **Toolchain:** C++23 compiler with `<format>` (GCC 13+ or equivalent Clang; Debian 12 Bookworm's default GCC 12 is too old), Qt 6.4+, CMake >= 3.21, Ninja, and Fooyin `0.15.1` headers/SDK. GoogleTest is optional and only required when `-DBUILD_TESTING=ON`.
 
 ## Build & Install
+
+| Platform / Method | Instructions |
+| --- | --- |
+| Arch Linux | [Arch Linux (and derivatives such as CachyOS, Manjaro)](#arch-linux-and-derivatives-such-as-cachyos-manjaro) |
+| Fedora 45+ | [Fedora (45+ with native `fooyin-devel` 0.15.1)](#fedora-45-with-native-fooyin-devel-0151) |
+| Ubuntu 24.04 SDK | [Ubuntu 24.04 (using Fooyin's official Linux SDK)](#ubuntu-2404-using-fooyins-official-linux-sdk) |
+| `.fyplugin` Bundle | [Building a `.fyplugin` Bundle (GUI Install / AppImage / Flatpak)](#building-a-fyplugin-bundle-gui-install--appimage--flatpak) |
 
 ### Arch Linux (and derivatives such as CachyOS, Manjaro)
 
