@@ -117,7 +117,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          dnf -y install gcc-c++ cmake ninja-build gtest-devel fooyin-devel
+          dnf -y install gcc-c++ cmake ninja-build qt6-qtbase-devel gtest-devel fooyin-devel
 
       - name: Configure, build, and test (dev preset)
         run: |
