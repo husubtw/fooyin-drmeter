@@ -7,13 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-26
+
 ### Added
 - `CMakePresets.json` with `release`, `dev`, and `asan` configure/build/test presets.
 - `DRMETER_BUILD_PLUGIN` CMake option to allow standalone `drmeter_core` builds without Fooyin installed.
-- `.clang-tidy` configuration, GitHub Actions CI workflow, `CONTRIBUTING.md`, and issue templates.
+- `DRMETER_PLUGIN_INSTALL_DIR` CMake cache variable for cross-distro user-local installs (e.g., overriding Fedora's `lib64/fooyin/plugins` default to `lib/fooyin/plugins` under `~/.local`).
+- Opt-in `DRMETER_PACKAGE_BUNDLE` CMake option (`package_plugin` target) to build `.fyplugin` bundles for Fooyin's GUI installer, AppImage, and Flatpak.
+- `.clang-tidy` configuration, 3-distro GitHub Actions CI workflow (Arch Linux, Ubuntu 24.04 via official Fooyin 0.15.1 Linux SDK, Fedora 45), `CONTRIBUTING.md`, and issue templates.
 
 ### Changed
 - Default `BUILD_TESTING` to `OFF` so end users can build the plugin without GoogleTest installed.
+- Require Fooyin `>= 0.15.1` in `find_package(Fooyin 0.15.1 REQUIRED)` and explicitly link `Fooyin::Utils`.
+- Updated `README.md` with cross-distro Linux build/install instructions and aligned `docs/DR_SPEC.md` with the codebase.
 
 ### Fixed
 - `DrTagWriter`: report failure instead of false success when `MusicLibrary::writeTrackMetadata()` returns an invalid `QFuture`, and guard `QFutureWatcher::result()` on empty results.
@@ -30,3 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pure C++23 `drmeter_core` library implementing TT DR14 measurement (`foo_dr_meter v1.0.8` parity) and 80-column `foo_dr.txt` / tabular clipboard formatting.
 - Multi-threaded offline `DrScanner` supporting standard lossless/lossy PCM, sample-exact CUE subsong slicing, and DSF/DSD64 decoding via Fooyin's `AudioLoader`.
 - `DrResultsDialog`, `DrProgressDialog`, multi-album directory log export (`DrLogExporter`), and safe `DYNAMIC RANGE` / `ALBUM DYNAMIC RANGE` tag writing (`DrTagWriter`).
+
+[Unreleased]: https://github.com/husubtw/fooyin-drmeter/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/husubtw/fooyin-drmeter/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/husubtw/fooyin-drmeter/releases/tag/v0.1.0

@@ -118,7 +118,7 @@ Links `drmeter_plugin_logic`, `Fooyin::Core`, `Fooyin::Gui`, and `Fooyin::Utils`
 80-character separator layout compatible with `foo_dr_meter v1.0.8` and `dr.loudness-war.info` (C-locale, `.` decimal separator):
 
 ```text
-fooyin <fooyin_version> / DR Meter v0.1.0
+fooyin <fooyin_version> / DR Meter v<plugin_version>
 log date: YYYY-MM-DD HH:MM:SS
 
 --------------------------------------------------------------------------------

@@ -17,7 +17,7 @@ using namespace Qt::StringLiterals;
 #endif
 
 #ifndef DRMETER_PLUGIN_VERSION
-#define DRMETER_PLUGIN_VERSION "0.1.0"
+#define DRMETER_PLUGIN_VERSION "0.1.1"
 #endif
 
 namespace Fooyin::DrMeter {
