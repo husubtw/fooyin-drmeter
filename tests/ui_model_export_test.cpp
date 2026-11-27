@@ -255,6 +255,247 @@ TEST(DrResultsModelTest, SanitizesChannelLabelsAndFailedTrackNamesMatchingFormat
               "Şğüöç)");
 }
 
+TEST(DrResultsModelTest, VerboseFlagControlsColumnsAndExposesTypedSortRole)
+{
+    ScannedAlbum album;
+    album.album.officialDr = 12;
+
+    ScannedTrack okTrack;
+    okTrack.ok                      = true;
+    okTrack.dr.trackDrInt           = 13;
+    okTrack.dr.metadata.trackNumber = 1;
+    okTrack.dr.metadata.title       = "Track One";
+    okTrack.dr.channels             = {
+        ChannelDrResult{"FL", false, 12.50, -18.25, -1.50},
+        ChannelDrResult{"FR", false, 13.50, -18.75, -0.50},
+    };
+    album.tracks.push_back(okTrack);
+
+    ScannedTrack failedTrack;
+    failedTrack.ok    = false;
+    failedTrack.error = u"Bad file"_s;
+    failedTrack.track = Track{u"/music/bad.flac"_s};
+    failedTrack.track.setTitle(u"Broken"_s);
+    album.tracks.push_back(failedTrack);
+
+    DrResultsModel compact{{album}, false};
+    EXPECT_FALSE(compact.isVerbose());
+    ASSERT_EQ(compact.columnCount(), 3);
+    EXPECT_FALSE(compact.headerData(3, Qt::Horizontal).isValid());
+    EXPECT_EQ(compact.data(compact.index(0, 0), DrResultsModel::SortRole).toString(), u"01-Track One"_s);
+    EXPECT_EQ(compact.data(compact.index(0, 1), DrResultsModel::SortRole).toInt(), 13);
+    EXPECT_EQ(compact.data(compact.index(0, 2), DrResultsModel::SortRole).toInt(), 12);
+    EXPECT_FALSE(compact.data(compact.index(1, 1), DrResultsModel::SortRole).isValid());
+    EXPECT_FALSE(compact.data(compact.index(1, 2), DrResultsModel::SortRole).isValid());
+
+    DrResultsModel verbose{{album}, true};
+    EXPECT_TRUE(verbose.isVerbose());
+    ASSERT_EQ(verbose.columnCount(), 9);
+    EXPECT_DOUBLE_EQ(verbose.data(verbose.index(0, 3), DrResultsModel::SortRole).toDouble(), 12.50);
+    EXPECT_DOUBLE_EQ(verbose.data(verbose.index(0, 5), DrResultsModel::SortRole).toDouble(), -18.25);
+    EXPECT_DOUBLE_EQ(verbose.data(verbose.index(0, 7), DrResultsModel::SortRole).toDouble(), -1.50);
+    EXPECT_FALSE(verbose.data(verbose.index(1, 3), DrResultsModel::SortRole).isValid());
+}
+
+TEST(DrResultsSortFilterProxyModelTest, SortsNumericallyPinsInvalidAtBottomAndRestoresOriginalOrder)
+{
+    ScannedAlbum albumA;
+    albumA.album.officialDr = 11;
+
+    // Row 0: Track DR 12, stereo only (no FC), RMS -20.16
+    ScannedTrack row0;
+    row0.ok                = true;
+    row0.dr.trackDrInt     = 12;
+    row0.dr.metadata.title = "zulu";
+    row0.dr.channels       = {
+        ChannelDrResult{"FL", false, 12.50, -20.16, -1.92},
+    };
+    albumA.tracks.push_back(row0);
+
+    // Row 1: Failed track
+    ScannedTrack row1;
+    row1.ok    = false;
+    row1.error = u"Decode error 1"_s;
+    row1.track = Track{u"/music/err1.flac"_s};
+    row1.track.setTitle(u"Bravo Error"_s);
+    albumA.tracks.push_back(row1);
+
+    // Row 2: Track DR 9 (tests numeric 9 < 12 vs lexical "12" < "9"), has FC
+    ScannedTrack row2;
+    row2.ok                = true;
+    row2.dr.trackDrInt     = 9;
+    row2.dr.metadata.title = "Alpha";
+    row2.dr.channels       = {
+        ChannelDrResult{"FL", false, 9.20, -10.57, -0.50},
+        ChannelDrResult{"FC", false, 8.80, -18.00, -2.00},
+    };
+    albumA.tracks.push_back(row2);
+
+    ScannedAlbum albumB;
+    albumB.album.officialDr = 13;
+
+    // Row 3: Track DR 12 (tie with row 0 — must keep source order), silent -inf RMS/Peak, has FC (-inf)
+    ScannedTrack row3;
+    row3.ok                = true;
+    row3.dr.trackDrInt     = 12;
+    row3.dr.metadata.title = "mike";
+    row3.dr.channels       = {
+        ChannelDrResult{"FL", false, 0.00, -std::numeric_limits<double>::infinity(),
+                        -std::numeric_limits<double>::infinity()},
+        ChannelDrResult{"FC", false, 0.00, -std::numeric_limits<double>::infinity(),
+                        -std::numeric_limits<double>::infinity()},
+    };
+    albumB.tracks.push_back(row3);
+
+    // Row 4: Second failed track
+    ScannedTrack row4;
+    row4.ok    = false;
+    row4.error = u"Decode error 2"_s;
+    row4.track = Track{u"/music/err2.flac"_s};
+    row4.track.setTitle(u"charlie Error"_s);
+    albumB.tracks.push_back(row4);
+
+    DrResultsModel model{{albumA, albumB}, true};
+    DrResultsSortFilterProxyModel proxy;
+    proxy.setSourceModel(&model);
+
+    const auto namesInProxyOrder = [&proxy]() {
+        QStringList out;
+        for(int r = 0; r < proxy.rowCount(); ++r) {
+            out.push_back(proxy.data(proxy.index(r, 0)).toString());
+        }
+        return out;
+    };
+
+    const QStringList originalOrder{u"zulu"_s, u"Bravo Error"_s, u"Alpha"_s, u"mike"_s, u"charlie Error"_s};
+    EXPECT_EQ(namesInProxyOrder(), originalOrder);
+
+    // Column 1 (Track DR): numeric 9 < 12, ties keep source order (zulu before mike), errors always at bottom
+    proxy.sort(1, Qt::AscendingOrder);
+    EXPECT_EQ(namesInProxyOrder(),
+              (QStringList{u"Alpha"_s, u"zulu"_s, u"mike"_s, u"Bravo Error"_s, u"charlie Error"_s}));
+
+    proxy.sort(1, Qt::DescendingOrder);
+    EXPECT_EQ(namesInProxyOrder(),
+              (QStringList{u"zulu"_s, u"mike"_s, u"Alpha"_s, u"Bravo Error"_s, u"charlie Error"_s}));
+
+    // Column 5 = RMS (FL): -inf < -20.16 < -10.57
+    ASSERT_EQ(model.headerData(5, Qt::Horizontal).toString(), u"RMS (FL)"_s);
+    proxy.sort(5, Qt::AscendingOrder);
+    EXPECT_EQ(namesInProxyOrder(),
+              (QStringList{u"mike"_s, u"zulu"_s, u"Alpha"_s, u"Bravo Error"_s, u"charlie Error"_s}));
+
+    proxy.sort(5, Qt::DescendingOrder);
+    EXPECT_EQ(namesInProxyOrder(),
+              (QStringList{u"Alpha"_s, u"zulu"_s, u"mike"_s, u"Bravo Error"_s, u"charlie Error"_s}));
+
+    // Column 6 = RMS (FC): missing FC (zulu) + errors pinned at bottom in BOTH Ascending and Descending
+    ASSERT_EQ(model.headerData(6, Qt::Horizontal).toString(), u"RMS (FC)"_s);
+    proxy.sort(6, Qt::AscendingOrder);
+    EXPECT_EQ(namesInProxyOrder(),
+              (QStringList{u"mike"_s, u"Alpha"_s, u"zulu"_s, u"Bravo Error"_s, u"charlie Error"_s}));
+
+    proxy.sort(6, Qt::DescendingOrder);
+    EXPECT_EQ(namesInProxyOrder(),
+              (QStringList{u"Alpha"_s, u"mike"_s, u"zulu"_s, u"Bravo Error"_s, u"charlie Error"_s}));
+
+    // Column 0 (Name): case-insensitive alphabetical sort
+    proxy.sort(0, Qt::AscendingOrder);
+    EXPECT_EQ(namesInProxyOrder(),
+              (QStringList{u"Alpha"_s, u"Bravo Error"_s, u"charlie Error"_s, u"mike"_s, u"zulu"_s}));
+
+    // sort(-1) restores original scan order
+    proxy.sort(-1);
+    EXPECT_EQ(namesInProxyOrder(), originalOrder);
+}
+
+TEST(DrResultsModelTest, FormatsRowsAsTsvForSelectionAndFullSortedTableInVerboseAndCompactModes)
+{
+    ScannedAlbum album;
+    album.album.officialDr = 11;
+
+    ScannedTrack t1;
+    t1.ok                      = true;
+    t1.dr.trackDrInt           = 13;
+    t1.dr.metadata.trackNumber = 1;
+    t1.dr.metadata.title       = "Loud Track";
+    t1.dr.channels             = {
+        ChannelDrResult{"FL", false, 13.00, -18.00, -1.00},
+    };
+    album.tracks.push_back(t1);
+
+    ScannedTrack bad;
+    bad.ok    = false;
+    bad.error = u"Broken"_s;
+    bad.track = Track{u"/music/bad.flac"_s};
+    bad.track.setTitle(u"Failed Track"_s);
+    album.tracks.push_back(bad);
+
+    ScannedTrack t2;
+    t2.ok                      = true;
+    t2.dr.trackDrInt           = 9;
+    t2.dr.metadata.trackNumber = 2;
+    t2.dr.metadata.title       = "Dynamic Track";
+    t2.dr.channels             = {
+        ChannelDrResult{"FL", false, 9.00, -12.50, -0.50},
+    };
+    album.tracks.push_back(t2);
+
+    // Verbose sorted ascending by Track DR: row 0 = 02-Dynamic Track (9), row 1 = 01-Loud Track (13), row 2 = Failed
+    DrResultsModel verboseModel{{album}, true};
+    DrResultsSortFilterProxyModel proxy;
+    proxy.setSourceModel(&verboseModel);
+    proxy.sort(1, Qt::AscendingOrder);
+
+    // Selection copy (no header): rows 0 and 1
+    EXPECT_EQ(formatRowsAsTsv(proxy, {0, 1}, false), u"02-Dynamic Track\t9\t11\t9.00 dB\t-12.50 dBFS\t-0.50 dBFS\n"
+                                                     u"01-Loud Track\t13\t11\t13.00 dB\t-18.00 dBFS\t-1.00 dBFS\n"_s);
+
+    // Full valid table copy (with header, sorted, excludes Error rows)
+    const auto validRows = collectValidRows(proxy);
+    EXPECT_EQ(validRows, (std::vector<int>{0, 1}));
+    EXPECT_EQ(formatRowsAsTsv(proxy, validRows, true), u"Name\tTrack DR\tAlbum DR\tDR (FL)\tRMS (FL)\tPeak (FL)\n"
+                                                       u"02-Dynamic Track\t9\t11\t9.00 dB\t-12.50 dBFS\t-0.50 dBFS\n"
+                                                       u"01-Loud Track\t13\t11\t13.00 dB\t-18.00 dBFS\t-1.00 dBFS\n"_s);
+
+    // Compact (verbose == false) exports only 3 columns
+    DrResultsModel compactModel{{album}, false};
+    DrResultsSortFilterProxyModel compactProxy;
+    compactProxy.setSourceModel(&compactModel);
+    compactProxy.sort(1, Qt::AscendingOrder);
+
+    EXPECT_EQ(formatRowsAsTsv(compactProxy, collectValidRows(compactProxy), true), u"Name\tTrack DR\tAlbum DR\n"
+                                                                                   u"02-Dynamic Track\t9\t11\n"
+                                                                                   u"01-Loud Track\t13\t11\n"_s);
+}
+
+TEST(DrResultsSortFilterProxyModelTest, AdvancesTriStateSortAscendingDescendingUnsorted)
+{
+    TriStateSort state;
+    EXPECT_EQ(state.column, -1);
+
+    // Click column 1: Unsorted -> Ascending -> Descending -> Unsorted
+    state = advanceTriStateSort(state, 1);
+    EXPECT_EQ(state.column, 1);
+    EXPECT_EQ(state.order, Qt::AscendingOrder);
+
+    state = advanceTriStateSort(state, 1);
+    EXPECT_EQ(state.column, 1);
+    EXPECT_EQ(state.order, Qt::DescendingOrder);
+
+    state = advanceTriStateSort(state, 1);
+    EXPECT_EQ(state.column, -1);
+
+    // Switching columns resets to Ascending on the new column
+    state = advanceTriStateSort(state, 2);
+    EXPECT_EQ(state.column, 2);
+    EXPECT_EQ(state.order, Qt::AscendingOrder);
+
+    state = advanceTriStateSort(state, 0);
+    EXPECT_EQ(state.column, 0);
+    EXPECT_EQ(state.order, Qt::AscendingOrder);
+}
+
 TEST(DrLogExporterTest, GroupsMultiAlbumByDirectoryConcatenatesAndDetectsOverwrites)
 {
     QTemporaryDir tempDir;

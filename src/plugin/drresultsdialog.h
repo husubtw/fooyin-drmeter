@@ -1,13 +1,16 @@
 #pragma once
 
+#include "plugin/drresultsmodel.h"
 #include "plugin/drscanner.h"
 
 #include <QDialog>
 
 #include <memory>
 
+class QAction;
 class QCloseEvent;
 class QLabel;
+class QPoint;
 class QPushButton;
 class QTableView;
 
@@ -18,7 +21,6 @@ class SettingsManager;
 } // namespace Fooyin
 
 namespace Fooyin::DrMeter {
-class DrResultsModel;
 class DrTagWriter;
 
 class DrResultsDialog : public QDialog
@@ -37,6 +39,10 @@ protected:
     void closeEvent(QCloseEvent* event) override;
 
 private:
+    void onHeaderSectionClicked(int logicalIndex);
+    void onTableContextMenu(const QPoint& pos);
+    void onCopySelection();
+    void updateCopySelectionActionState();
     void onUpdateFileTags();
     void onWriteLog();
     void onCopyLog();
@@ -49,9 +55,12 @@ private:
     DrScanSummary m_summary;
     bool m_hasValidAlbums{false};
     int m_preferredWidth{960};
+    TriStateSort m_sortState;
 
     QTableView* m_tableView{nullptr};
     DrResultsModel* m_model{nullptr};
+    DrResultsSortFilterProxyModel* m_proxyModel{nullptr};
+    QAction* m_copySelectionAction{nullptr};
     QLabel* m_footerLabel{nullptr};
     QPushButton* m_updateTagsButton{nullptr};
     QPushButton* m_writeLogButton{nullptr};

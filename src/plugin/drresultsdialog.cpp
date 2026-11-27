@@ -7,6 +7,7 @@
 #include "plugin/drtagwriter.h"
 
 #include <QAbstractItemView>
+#include <QAction>
 #include <QClipboard>
 #include <QCloseEvent>
 #include <QDialogButtonBox>
@@ -15,7 +16,10 @@
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QItemSelectionModel>
+#include <QKeySequence>
 #include <QLabel>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -23,6 +27,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <ranges>
 
 using namespace Qt::StringLiterals;
 
@@ -89,7 +94,9 @@ DrResultsDialog::DrResultsDialog(MusicLibrary* library, std::shared_ptr<AudioLoa
     , m_summary{std::move(summary)}
     , m_hasValidAlbums{!DrLogExporter::collectValidAlbums(m_summary.albums).empty()}
     , m_tableView{new QTableView(this)}
-    , m_model{new DrResultsModel(m_summary.albums, this)}
+    , m_model{new DrResultsModel(m_summary.albums, DrSettings{m_settings}.verboseDialog(), this)}
+    , m_proxyModel{new DrResultsSortFilterProxyModel(this)}
+    , m_copySelectionAction{new QAction(tr("Copy"), this)}
     , m_footerLabel{new QLabel(formatMeasurementFooter(m_summary.elapsedMs, m_summary.speedRatio), this)}
     , m_updateTagsButton{new QPushButton(tr("Update File Tags"), this)}
     , m_writeLogButton{new QPushButton(tr("Write Log"), this)}
@@ -100,31 +107,52 @@ DrResultsDialog::DrResultsDialog(MusicLibrary* library, std::shared_ptr<AudioLoa
     setWindowTitle(tr("DR Meter Results"));
     setAttribute(Qt::WA_DeleteOnClose);
 
-    m_tableView->setModel(m_model);
+    m_proxyModel->setSourceModel(m_model);
+    m_tableView->setModel(m_proxyModel);
+    m_tableView->setSortingEnabled(false);
     m_tableView->verticalHeader()->hide();
     m_tableView->setAlternatingRowColors(true);
     m_tableView->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_tableView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_tableView->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_tableView->setWordWrap(false);
+    m_tableView->setContextMenuPolicy(Qt::CustomContextMenu);
+
+    m_copySelectionAction->setShortcut(QKeySequence::Copy);
+    m_copySelectionAction->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    m_copySelectionAction->setEnabled(false);
+    m_tableView->addAction(m_copySelectionAction);
+    QObject::connect(m_copySelectionAction, &QAction::triggered, this, &DrResultsDialog::onCopySelection);
+    QObject::connect(m_tableView, &QWidget::customContextMenuRequested, this, &DrResultsDialog::onTableContextMenu);
+    if(auto* selectionModel = m_tableView->selectionModel()) {
+        QObject::connect(selectionModel, &QItemSelectionModel::selectionChanged, this,
+                         &DrResultsDialog::updateCopySelectionActionState);
+    }
 
     auto* header = m_tableView->horizontalHeader();
     header->setStretchLastSection(false);
+    header->setSectionsClickable(true);
+    header->setSortIndicatorShown(false);
+    QObject::connect(header, &QHeaderView::sectionClicked, this, &DrResultsDialog::onHeaderSectionClicked);
     m_tableView->resizeColumnsToContents();
 
-    if(m_model->columnCount() > 0) {
+    if(m_proxyModel->columnCount() > 0) {
         constexpr int ColumnPaddingPx = 16;
         const int nameWidth           = std::max(240, m_tableView->columnWidth(0) + ColumnPaddingPx);
         int numericColsTotalWidth     = 0;
 
-        for(int col = 1; col < m_model->columnCount(); ++col) {
+        for(int col = 1; col < m_proxyModel->columnCount(); ++col) {
             header->setSectionResizeMode(col, QHeaderView::Interactive);
             const int paddedWidth = m_tableView->columnWidth(col) + ColumnPaddingPx;
             m_tableView->setColumnWidth(col, paddedWidth);
             numericColsTotalWidth += paddedWidth;
         }
 
-        if(m_model->columnCount() <= 9) {
+        if(!m_model->isVerbose()) {
+            header->setSectionResizeMode(0, QHeaderView::Stretch);
+            m_preferredWidth = std::clamp(nameWidth + numericColsTotalWidth + 48, 560, 680);
+        }
+        else if(m_proxyModel->columnCount() <= 9) {
             header->setSectionResizeMode(0, QHeaderView::Stretch);
             m_preferredWidth = std::clamp(nameWidth + numericColsTotalWidth + 48, 920, 1280);
         }
@@ -289,16 +317,78 @@ void DrResultsDialog::onCopyLog()
     }
 }
 
-void DrResultsDialog::onCopyResults()
+void DrResultsDialog::onHeaderSectionClicked(int logicalIndex)
 {
-    const auto validAlbums = DrLogExporter::collectValidAlbums(m_summary.albums);
-    if(validAlbums.empty()) {
+    m_sortState  = advanceTriStateSort(m_sortState, logicalIndex);
+    auto* header = m_tableView->horizontalHeader();
+
+    if(m_sortState.column < 0) {
+        header->setSortIndicatorShown(false);
+        m_proxyModel->sort(-1);
+    }
+    else {
+        header->setSortIndicatorShown(true);
+        header->setSortIndicator(m_sortState.column, m_sortState.order);
+        m_proxyModel->sort(m_sortState.column, m_sortState.order);
+    }
+}
+
+void DrResultsDialog::onTableContextMenu(const QPoint& pos)
+{
+    updateCopySelectionActionState();
+    QMenu menu{this};
+    menu.addAction(m_copySelectionAction);
+    menu.exec(m_tableView->viewport()->mapToGlobal(pos));
+}
+
+void DrResultsDialog::onCopySelection()
+{
+    auto* selectionModel = m_tableView->selectionModel();
+    if(!selectionModel) {
         return;
     }
 
-    const std::string text = DrLogFormatter::formatResultsTable(validAlbums);
+    const QModelIndexList selected = selectionModel->selectedRows();
+    if(selected.isEmpty()) {
+        return;
+    }
+
+    std::vector<int> rows;
+    rows.reserve(static_cast<size_t>(selected.size()));
+    for(const QModelIndex& idx : selected) {
+        rows.push_back(idx.row());
+    }
+    std::ranges::sort(rows);
+    const auto dup = std::ranges::unique(rows);
+    rows.erase(dup.begin(), dup.end());
+
+    const QString text = formatRowsAsTsv(*m_proxyModel, rows, false);
+    if(text.isEmpty()) {
+        return;
+    }
+
     if(auto* clipboard = QGuiApplication::clipboard()) {
-        clipboard->setText(QString::fromStdString(text));
+        clipboard->setText(text);
+    }
+}
+
+void DrResultsDialog::updateCopySelectionActionState()
+{
+    auto* selectionModel    = m_tableView->selectionModel();
+    const bool hasSelection = selectionModel != nullptr && !selectionModel->selectedRows().isEmpty();
+    m_copySelectionAction->setEnabled(hasSelection);
+}
+
+void DrResultsDialog::onCopyResults()
+{
+    const auto validRows = collectValidRows(*m_proxyModel);
+    if(validRows.empty()) {
+        return;
+    }
+
+    const QString text = formatRowsAsTsv(*m_proxyModel, validRows, true);
+    if(auto* clipboard = QGuiApplication::clipboard()) {
+        clipboard->setText(text);
     }
 }
 } // namespace Fooyin::DrMeter

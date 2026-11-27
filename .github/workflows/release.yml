@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release-bundle:
+    name: Build Ubuntu 24.04 .fyplugin Bundle and Publish Release
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      FOOYIN_SDK_URL: https://github.com/fooyin/fooyin/releases/download/v0.15.1/fooyin-sdk-0.15.1-linux-x64-qt6.4.tar.xz
+      FOOYIN_SDK_SHA256: 5b90b16628cdcd8f9a58ad087b03f58da1174948e475ab077d84fd22eeb1b090
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config ca-certificates curl xz-utils \
+            qt6-base-dev libqt6svg6 libqt6sql6-sqlite \
+            libavcodec60 libavfilter9 libavformat60 libavutil58 libswresample4 \
+            libicu74 libtag1v5 libarchive13t64 zlib1g libqcoro6core0t64 libqcoro6network0t64
+
+      - name: Download and verify Fooyin 0.15.1 Linux SDK
+        run: |
+          curl --fail --location --output fooyin-sdk.tar.xz "$FOOYIN_SDK_URL"
+          echo "${FOOYIN_SDK_SHA256}  fooyin-sdk.tar.xz" | sha256sum -c -
+          mkdir -p fooyin-sdk
+          tar -xJf fooyin-sdk.tar.xz -C fooyin-sdk --strip-components=1
+
+      - name: Build .fyplugin bundle
+        run: |
+          cmake -S . -B build-bundle -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=OFF \
+            -DDRMETER_PACKAGE_BUNDLE=ON \
+            -DCMAKE_PREFIX_PATH="$PWD/fooyin-sdk"
+          cmake --build build-bundle --target package_plugin
+
+      - name: Prepare release asset and SHA256SUMS.txt
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist
+          ASSET_NAME="fooyin-drmeter-${TAG_NAME}-ubuntu24.04-fooyin0.15.1-qt6.4-x64.fyplugin"
+          cp build-bundle/fooyin-drmeter-linux-x64.fyplugin "dist/${ASSET_NAME}"
+          (cd dist && sha256sum "${ASSET_NAME}" > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*.fyplugin
+            dist/SHA256SUMS.txt
+          body: |
+            > [!IMPORTANT]
+            > **ABI Compatibility Notice:** The attached `.fyplugin` bundle is built strictly for the **Ubuntu 24.04 / Fooyin 0.15.1 / Qt 6.4 (`x86_64`)** ABI.
+            > It will **not** load on Arch Linux, Fedora, or Flatpak — on those systems, please build from source (or install via AUR on Arch Linux) as documented in the [README](https://github.com/husubtw/fooyin-drmeter#build--install).

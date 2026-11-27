@@ -4,7 +4,7 @@
 Offline Dynamic Range (`TT DR14`) scanner plugin for Fooyin `0.15.1`, matching the measurement behavior, log format, and results dialog layout of Foobar2000's `foo_dr_meter v1.0.8`.
 
 - **Source of Truth:** `foo_dr_meter v1.0.8` reference behavior (DR14 block windowing, AES17 RMS, 80-character `foo_dr.txt` layout, and results dialog columns).
-- **Out of Scope (v0.1):** Real-time playback meter widget and a dedicated settings UI page (settings UI exposure via `AdvancedSettingsRegistry` is planned for v0.2).
+- **Out of Scope:** Real-time playback meter widget (offline TT DR14 analysis only).
 
 ---
 
@@ -14,16 +14,16 @@ Offline Dynamic Range (`TT DR14`) scanner plugin for Fooyin `0.15.1`, matching t
 No `Fooyin::*`, Qt, or codec library dependencies.
 - `DrAnalyzer`: Streaming per-channel DR14, AES17 RMS ($\sqrt{2}$ / `+3.0103 dB` factor), and sample peak calculator (`process(std::span<const double> interleaved, size_t frameCount)` + `finish()`).
 - Result structs (`drtypes.h`): Per-channel metrics (`drDb`, `rmsDb`, `peakDb`, `channelLabel`, `isLfe`), track result (`trackDrInt`, `trackDrFloat`, `peakDb`, `rmsDb`, `totalFrames`, `durationSec`, format metadata), and album result (`officialDr`, track list).
-- `DrLogFormatter`: Generates `foo_dr.txt` logs and tabular clipboard text (`Copy Results`).
+- `DrLogFormatter`: Generates `foo_dr.txt` logs, core TSV tables (`formatResultsTable()`), and UTF-8-safe text sanitization (`sanitizeText()`).
 
 ### 2.2. `drmeter_plugin_logic` (Static Library — Non-GUI Plugin Logic)
 Links `drmeter_core`, `Fooyin::Core`, and `Fooyin::Utils`.
 - `DrScanner` / `DrWorker`: `QThread` + `QtConcurrent::map` + `std::stop_token`, decoding via `AudioLoader::loadDecoderForTrack(track, options)` and `Audio::convert(buffer, f64Format)`. Uses `AudioDecoder::NoLooping | AudioDecoder::NoInfiniteLooping` for bounded or offset segments (e.g., CUE subsongs) and `AudioDecoder::NoSeeking | AudioDecoder::NoInfiniteLooping` for standard full-file tracks.
 - `DrAlbumGrouper`: Groups tracks using Fooyin's `ScriptParser` with default pattern `%album artist% | %date% | %album% | %discnumber%`.
 - `DrLogExporter`: Collects valid albums, plans per-directory log writes with overwrite detection, and performs atomic UTF-8 file writes via `QSaveFile`.
-- `DrResultsModel`: `QAbstractTableModel` exposing track/album DR and dynamic per-channel metrics.
+- `DrResultsModel` / `DrResultsSortFilterProxyModel`: `QAbstractTableModel` exposing track/album DR, dynamic per-channel metrics (`verbose` toggle), typed `SortRole`, numerical proxy sorting with invalid/missing entries pinned at the bottom, and TSV serialization helpers (`formatRowsAsTsv`, `collectValidRows`).
 - `DrTagWriter`: Extra-tag writer for `DYNAMIC RANGE` and `ALBUM DYNAMIC RANGE`.
-- `DrSettings`: Reads and writes plugin settings through `SettingsManager::fileValue()` / `fileSet()`.
+- `DrSettings`: Reads and writes plugin settings through `SettingsManager::fileValue()` / `fileSet()` and registers them in `GuiPluginContext::advancedSettingsRegistry` under `Tools / DR Meter`.
 
 ### 2.3. `fyplugin_drmeter` (Fooyin Plugin Module — `create_fooyin_plugin`)
 Links `drmeter_plugin_logic`, `Fooyin::Core`, `Fooyin::Gui`, and `Fooyin::Utils`; implements `CorePlugin` + `GuiPlugin`.
@@ -170,13 +170,19 @@ Codec:             FLAC
 - Clicking `Cancel` triggers `std::stop_source::request_stop()` and closes without opening the results dialog. If a queued `DrWorker::scanFinished` arrives after cancellation, `DrScanner` suppresses `scanFinished` and emits `scanCancelled`.
 
 ### 6.3. `DR Meter Results` Dialog (`foo_dr_meter v1.0.8` Layout)
-- **Table Columns (`QTableView` + `DrResultsModel`):**
+- **Table Columns (`QTableView` + `DrResultsSortFilterProxyModel` + `DrResultsModel`):**
   - `Name`, `Track DR`, `Album DR`
-  - Dynamic per-channel columns derived from `AudioFormat::channelLayout()` (e.g., `FL`, `FR` for stereo):
+  - When `DrMeter/VerboseDialog` is `true` (default), dynamic per-channel columns derived from `AudioFormat::channelLayout()` (e.g., `FL`, `FR` for stereo):
     - `DR (FL)`, `DR (FR)`, ... (`12.92 dB`)
     - `RMS (FL)`, `RMS (FR)`, ... (`-20.16 dBFS`)
     - `Peak (FL)`, `Peak (FR)`, ... (`-1.92 dBFS` / `0.00 dBFS`)
+  - When `DrMeter/VerboseDialog` is `false`, only the 3 base columns (`Name`, `Track DR`, `Album DR`) are shown and the preferred dialog width clamps to `560–680 px`.
   - Both channel labels and failed-track `Name` values in `DrResultsModel` are sanitized with `DrLogFormatter::sanitizeText()` so table display and channel matching remain consistent with `DrLogFormatter::formatResultsTable()`.
+- **Sorting & Clipboard Actions:**
+  - Clicking a column header cycles through **Ascending → Descending → Unsorted** (`sort(-1)` restores original scan order and hides the sort indicator).
+  - Numerical columns (`col >= 1`) sort by typed `DrResultsModel::SortRole` (`int` for DR, `double` for channel metrics with `-inf` smallest), pinning `Error` rows and missing channel cells at the bottom in both ascending and descending order and preserving original source row order on ties. Column `0` (`Name`) sorts case-insensitively (`Qt::CaseInsensitive`).
+  - `Ctrl+C` (`QKeySequence::Copy`) and right-click context menu **Copy** copy unique selected rows in current visual order as TSV without a header (`formatRowsAsTsv(..., false)`), disabled when selection is empty.
+  - **Copy Results** copies all valid (`ok`) rows in current visual/sorted order and active verbose/compact column layout with a header (`formatRowsAsTsv(..., true)`).
 - **Bottom Bar:**
   - Left: `Measured in: M:SS.mmm, speed: XXXX.XXx` (wall-clock elapsed time and total audio duration / elapsed time ratio).
   - Right Buttons: `Update File Tags`, `Write Log`, `Copy Log`, `Copy Results`, `Close`.
@@ -184,10 +190,15 @@ Codec:             FLAC
 ---
 
 ## 7. Settings (`DrSettings`)
-Settings are persisted in Fooyin's `SettingsManager` under the following keys and defaults:
-- `DrMeter/AlbumGroupingPattern`: `"%album artist% | %date% | %album% | %discnumber%"`
-- `DrMeter/LogFileName`: `"foo_dr.txt"`
-  - Validated and normalized via `DrSettings::normalizeLogFileName()` on read, write, and defensively in `DrLogExporter::planDirectoryLogWrites()`: after trimming whitespace, if the value is empty, `.`, `..`, or contains path separators (`/`, `\`), `:` (drive/URI), or ASCII control characters (`< 0x20` or `0x7F`), it falls back to `"foo_dr.txt"`.
-- `DrMeter/WriteAlbumDrForSingleTrack`: `true`
+Settings are persisted in Fooyin's `SettingsManager` (`fileValue()` / `fileSet()`) and exposed in Fooyin's **Preferences → Advanced → Tools → DR Meter** via `GuiPluginContext::advancedSettingsRegistry` under the following keys and defaults:
+- `DrMeter/AlbumGroupingPattern`: `"%album artist% | %date% | %album% | %discnumber%"` (`LineEdit`, trims whitespace and reverts empty values to default)
+- `DrMeter/LogFileName`: `"foo_dr.txt"` (`LineEdit`)
+  - Validated (`DrSettings::validateLogFileName()`) in the Advanced settings UI and normalized (`DrSettings::normalizeLogFileName()`) on read, write, and defensively in `DrLogExporter::planDirectoryLogWrites()`: after trimming whitespace, empty values revert to `"foo_dr.txt"`, and `.`, `..`, path separators (`/`, `\`), `:` (drive/URI), or ASCII control characters (`< 0x20` or `0x7F`) are rejected in UI validation and safely fall back to `"foo_dr.txt"`.
+- `DrMeter/WriteAlbumDrForSingleTrack`: `true` (`CheckBox`)
+- `DrMeter/VerboseDialog`: `true` (`CheckBox`, toggles per-channel DR/RMS/Peak columns in `DR Meter Results`)
 
-Exposing these keys in Fooyin's settings UI via `GuiPluginContext::advancedSettingsRegistry` (`Tools / DR Meter`) is planned for v0.2.
+---
+
+## 8. Release & Plugin ABI Policy
+- `.github/workflows/release.yml` builds and attaches a prebuilt `.fyplugin` bundle (`fooyin-drmeter-<tag>-ubuntu24.04-fooyin0.15.1-qt6.4-x64.fyplugin`) and `SHA256SUMS.txt` on pushed `v*` tags using the verified Fooyin `0.15.1` Ubuntu 24.04 Linux SDK.
+- Because Fooyin plugins are native C++ binaries bound to the Fooyin plugin IID and Qt 6 ABI, the prebuilt release bundle targets **Ubuntu 24.04 / Fooyin 0.15.1 / Qt 6.4 (`x86_64`)** only and is incompatible with Arch Linux, Fedora, or Flatpak (those environments must build from source or install via AUR).

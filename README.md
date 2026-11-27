@@ -14,8 +14,10 @@ Offline Dynamic Range (`TT DR14`) scanner plugin for [Fooyin](https://github.com
 
 - Per-track and Official Album TT DR14 measurement grouped by album tags (falling back to directory path when untagged).
 - Per-channel DR, AES17 RMS, and unclipped sample peak (including `> 0 dBFS` float peaks) for mono, stereo, and multichannel tracks, excluding LFE channels from the DR average.
+- Interactive results dialog with 3-state numerical column sorting (Ascending → Descending → Unsorted, keeping `Error` and missing channel cells pinned at the bottom), `Ctrl+C` / right-click **Copy** for selected rows, and a compact/verbose table mode toggle.
+- Native Fooyin settings integration under **Preferences → Advanced → Tools → DR Meter** (album grouping pattern, default log file name with path-safety validation, single-track `ALBUM DYNAMIC RANGE` toggle, and verbose results dialog toggle).
 - Sample-exact CUE subsong analysis (external `.cue` and embedded cuesheets) and DSF/DSD decoding.
-- Single- and multi-album `foo_dr.txt` export with directory grouping and overwrite confirmation, plus clipboard export for logs and TSV tables.
+- Single- and multi-album `foo_dr.txt` export with directory grouping and overwrite confirmation, plus clipboard export for logs and sorted TSV tables.
 - Extra-tag writing for `DYNAMIC RANGE` and `ALBUM DYNAMIC RANGE`.
 
 Technical details and math definitions are documented in [docs/DR_SPEC.md](docs/DR_SPEC.md).
@@ -68,6 +70,7 @@ Raw file: [docs/foo_dr_example.txt](docs/foo_dr_example.txt)
 
 - **Tested platforms:** Linux with Fooyin `0.15.1` (Arch Linux, Fedora 45, and Ubuntu 24.04 via the official Fooyin Linux SDK).
 - **Plugin ABI:** Fooyin plugins are native C++ binaries bound to the Fooyin plugin IID and Qt 6 ABI; build against the installed Fooyin/Qt 6 version and rebuild after Fooyin upgrades.
+- **Prebuilt GitHub Releases:** Tagged `.fyplugin` release bundles target the **Ubuntu 24.04 / Fooyin 0.15.1 / Qt 6.4 (`x86_64`)** ABI only (verified with `SHA256SUMS.txt`). They will **not** work on Arch Linux, Fedora, or Flatpak — build from source (or install via AUR on Arch Linux) on those systems.
 - **Untested platforms:** Windows and FreeBSD are untested in v0.1 (PRs welcome).
 - **Toolchain:** C++23 compiler with `<format>` (GCC 13+ or equivalent Clang; Debian 12 Bookworm's default GCC 12 is too old), Qt 6.4+, CMake >= 3.21, Ninja, and Fooyin `0.15.1` headers/SDK. GoogleTest is optional and only required when `-DBUILD_TESTING=ON`.
 
@@ -149,7 +152,11 @@ FOOYIN_PLUGIN_PATH="$PWD/build-release" fooyin
 
 1. Select one or more tracks or albums in Fooyin.
 2. Right-click and choose **Dynamic Range Meter** (also bindable in Fooyin Shortcuts as `DrMeter.MeasureDynamicRange`).
-3. Review track and per-channel DR/RMS/Peak values, then optionally run **Update File Tags**, **Write Log**, **Copy Log**, or **Copy Results**.
+3. Review track and per-channel DR/RMS/Peak values:
+   - Click any column header to cycle sorting (**Ascending → Descending → Unsorted**); `Error` rows and missing channel cells stay pinned at the bottom.
+   - Select rows and press `Ctrl+C` (or right-click → **Copy**) to copy selected rows as TSV without a header.
+   - Use **Update File Tags**, **Write Log**, **Copy Log**, or **Copy Results** (copies all valid rows with a header in the current sort order and verbose/compact column layout).
+4. Configure plugin behavior under **Preferences → Advanced → Tools → DR Meter** (`Album grouping pattern`, `Log file name`, `Write ALBUM DYNAMIC RANGE for single-track albums`, and `Verbose results dialog`).
 
 ## Behavior Notes
 

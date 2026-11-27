@@ -46,6 +46,7 @@ void DrMeterPlugin::initialise(const GuiPluginContext& context)
     m_actionManager       = context.actionManager;
     m_selectionController = context.trackSelection;
 
+    DrSettings::registerAdvancedSettings(context.advancedSettingsRegistry, m_settings);
     setupContextMenu();
 }
 

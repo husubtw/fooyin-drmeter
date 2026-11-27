@@ -10,6 +10,7 @@
 #include <core/library/musiclibrary.h>
 #include <core/scripting/scriptregistry.h>
 #include <core/track.h>
+#include <utils/settings/advancedsettingsregistry.h>
 #include <utils/settings/settingsmanager.h>
 
 #include <QCoreApplication>
@@ -1545,6 +1546,103 @@ TEST(DrSettingsTest, RejectsUnsafeLogFileNamesAndFallsBackToDefault)
     EXPECT_EQ(DrSettings::normalizeLogFileName(u"  my_album_dr.txt  "_s), u"my_album_dr.txt"_s);
     settings.setLogFileName(u"  my_album_dr.txt  "_s);
     EXPECT_EQ(settings.logFileName(), u"my_album_dr.txt"_s);
+}
+
+TEST(DrSettingsTest, VerboseDialogDefaultPersistenceAndAdvancedSettingsRegistry)
+{
+    // Standalone default and toggle
+    DrSettings standalone;
+    EXPECT_TRUE(DrSettings::defaultVerboseDialog());
+    EXPECT_TRUE(standalone.verboseDialog());
+    standalone.setVerboseDialog(false);
+    EXPECT_FALSE(standalone.verboseDialog());
+
+    // Persistence via SettingsManager
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    SettingsManager manager{tempDir.filePath(u"advanced_settings.conf"_s)};
+
+    DrSettings persisted{&manager};
+    EXPECT_TRUE(persisted.verboseDialog());
+    persisted.setVerboseDialog(false);
+    EXPECT_FALSE(DrSettings{&manager}.verboseDialog());
+
+    // Defensive null checks
+    DrSettings::registerAdvancedSettings(nullptr, &manager);
+    AdvancedSettingsRegistry registry{&manager};
+    DrSettings::registerAdvancedSettings(&registry, nullptr);
+    EXPECT_TRUE(registry.descriptors().empty());
+
+    // Register all 4 settings under Tools / DR Meter
+    DrSettings::registerAdvancedSettings(&registry, &manager);
+    const auto descriptors = registry.descriptors();
+    ASSERT_EQ(descriptors.size(), 4U);
+
+    const auto findDesc = [&descriptors](const char* key) -> const AdvancedSettingDescriptor* {
+        const QString id = QString::fromLatin1(key);
+        const auto it    = std::ranges::find(descriptors, id, &AdvancedSettingDescriptor::id);
+        return it != descriptors.end() ? &(*it) : nullptr;
+    };
+
+    const auto* groupDesc   = findDesc(SettingKeys::AlbumGroupingPattern);
+    const auto* logFileDesc = findDesc(SettingKeys::LogFileName);
+    const auto* singleDesc  = findDesc(SettingKeys::WriteAlbumDrForSingleTrack);
+    const auto* verboseDesc = findDesc(SettingKeys::VerboseDialog);
+    ASSERT_NE(groupDesc, nullptr);
+    ASSERT_NE(logFileDesc, nullptr);
+    ASSERT_NE(singleDesc, nullptr);
+    ASSERT_NE(verboseDesc, nullptr);
+
+    const QStringList expectedCategory{u"Tools"_s, u"DR Meter"_s};
+    for(const auto* desc : {groupDesc, logFileDesc, singleDesc, verboseDesc}) {
+        EXPECT_EQ(desc->category, expectedCategory);
+        EXPECT_TRUE(desc->read);
+        EXPECT_TRUE(desc->write);
+    }
+
+    EXPECT_TRUE(std::holds_alternative<AdvancedSettingLineEdit>(groupDesc->editor));
+    EXPECT_TRUE(std::holds_alternative<AdvancedSettingLineEdit>(logFileDesc->editor));
+    EXPECT_TRUE(std::holds_alternative<AdvancedSettingCheckBox>(singleDesc->editor));
+    EXPECT_TRUE(std::holds_alternative<AdvancedSettingCheckBox>(verboseDesc->editor));
+
+    // AlbumGroupingPattern: normalises empty to default and writes back via INI fileSet
+    ASSERT_TRUE(groupDesc->normalise);
+    EXPECT_EQ(groupDesc->normalise(u"   "_s).toString(), DrSettings::defaultAlbumGroupingPattern());
+    EXPECT_EQ(groupDesc->normalise(u" %album% "_s).toString(), u"%album%"_s);
+    groupDesc->write(groupDesc->normalise(u" %artist% | %album% "_s));
+    EXPECT_EQ(DrSettings{&manager}.albumGroupingPattern(), u"%artist% | %album%"_s);
+    EXPECT_EQ(groupDesc->read().toString(), u"%artist% | %album%"_s);
+
+    // LogFileName: normalises empty to default, rejects path traversal/control chars in validate, safely writes
+    ASSERT_TRUE(logFileDesc->normalise);
+    ASSERT_TRUE(logFileDesc->validate);
+    EXPECT_EQ(logFileDesc->normalise(u"   "_s).toString(), DrSettings::defaultLogFileName());
+    EXPECT_TRUE(logFileDesc->validate(logFileDesc->normalise(u"custom_dr.txt"_s)).isEmpty());
+    EXPECT_FALSE(logFileDesc->validate(logFileDesc->normalise(u"../escape.txt"_s)).isEmpty());
+    EXPECT_FALSE(logFileDesc->validate(logFileDesc->normalise(u"/tmp/x.txt"_s)).isEmpty());
+    EXPECT_FALSE(logFileDesc->validate(logFileDesc->normalise(u"sub/foo_dr.txt"_s)).isEmpty());
+    EXPECT_FALSE(logFileDesc->validate(logFileDesc->normalise(u"C:foo_dr.txt"_s)).isEmpty());
+    EXPECT_FALSE(logFileDesc->validate(logFileDesc->normalise(u"."_s)).isEmpty());
+    EXPECT_FALSE(logFileDesc->validate(logFileDesc->normalise(u".."_s)).isEmpty());
+    EXPECT_FALSE(logFileDesc->validate(logFileDesc->normalise(u"bad\x01name.txt"_s)).isEmpty());
+
+    logFileDesc->write(u"custom_dr.txt"_s);
+    EXPECT_EQ(DrSettings{&manager}.logFileName(), u"custom_dr.txt"_s);
+    EXPECT_EQ(logFileDesc->read().toString(), u"custom_dr.txt"_s);
+
+    // Direct write of unsafe value still normalizes safely
+    logFileDesc->write(u"../escape.txt"_s);
+    EXPECT_EQ(DrSettings{&manager}.logFileName(), DrSettings::defaultLogFileName());
+
+    // Checkboxes: read/write stay in sync with DrSettings INI keys
+    EXPECT_EQ(verboseDesc->defaultValue.toBool(), true);
+    EXPECT_FALSE(verboseDesc->read().toBool()); // set to false above
+    verboseDesc->write(true);
+    EXPECT_TRUE(DrSettings{&manager}.verboseDialog());
+
+    EXPECT_EQ(singleDesc->defaultValue.toBool(), true);
+    singleDesc->write(false);
+    EXPECT_FALSE(DrSettings{&manager}.writeAlbumDrForSingleTrack());
 }
 } // namespace
 } // namespace Fooyin::DrMeter
