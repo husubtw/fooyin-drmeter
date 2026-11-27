@@ -28,6 +28,7 @@ public:
 
     [[nodiscard]] static QString defaultAlbumGroupingPattern();
     [[nodiscard]] static QString defaultLogFileName();
+    [[nodiscard]] static QString normalizeLogFileName(const QString& fileName);
     [[nodiscard]] static bool defaultWriteAlbumDrForSingleTrack() noexcept;
 
 private:

@@ -1,4 +1,5 @@
 #include "core/drlogformatter.h"
+#include "core/drversion.h"
 
 #include <gtest/gtest.h>
 
@@ -207,8 +208,9 @@ TEST(DrLogFormatterTest, FormatsTrackLabelsMixedMetadataAndMultiAlbumConcatenati
 
     const std::vector<AlbumDrResult> twoAlbums{mixed, makeExampleAlbum()};
     const std::string multiLog = DrLogFormatter::formatMultiAlbumLog(twoAlbums, {.logDate = "2026-11-25 12:00:00"});
-    const std::string sep      = "================================================================================\n\n"
-                                 "fooyin 0.15.1 / DR Meter v0.1.2\n";
+    const std::string sep
+        = std::string{"================================================================================\n\nfooyin "}
+        + std::string{MinFooyinVersion} + " / DR Meter v" + std::string{PluginVersion} + "\n";
     EXPECT_NE(multiLog.find(sep), std::string::npos);
 }
 

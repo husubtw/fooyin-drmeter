@@ -95,6 +95,7 @@ Links `drmeter_plugin_logic`, `Fooyin::Core`, `Fooyin::Gui`, and `Fooyin::Utils`
 ### 4.1. Album Grouping
 - Default grouping pattern: `%album artist% | %date% | %album% | %discnumber%` evaluated via Fooyin's `ScriptParser`.
 - Fallback key when all fields are empty: parent directory path.
+- Parent directory resolution: uses the archive file's parent directory for valid `unpack://` tracks with an absolute `archivePath()`, and returns an empty directory (never `QDir::currentPath()`) for remote, virtual, malformed archive, or non-absolute tracks so later valid tracks in the same group can populate `group.directory`.
 - Each album group computes its own `Official DR value`.
 
 ### 4.2. Tag Writing (`Update File Tags`)
@@ -145,15 +146,16 @@ Codec:             FLAC
 - **Track label format:** Zero-padded 2-digit track number + hyphen + title (`01-Track One`); fall back to `<Title>` alone if track number is missing/zero.
 - **Bit-depth reporting (`buildTrackMetadata()`):** Lossy tracks (`track.encoding()` equal to `"Lossy"`, case-insensitive) and unprobed floating-point streams (`SampleFormat::F32`, `SampleFormat::F64`, or `SampleFormat::Unknown` with `track.bitDepth() <= 0`) set `bitsPerSample = 0`, so `foo_dr.txt` omits the `Bits per sample:` line. Non-lossy tracks use `track.bitDepth()` when `> 0`; fallback to `decodedFormat.bitdepth()` applies only to integer PCM formats (`U8`, `S16`, `S24In32`, `S32`).
 - If an album contains mixed sample rates, bit depths, or codecs, list all unique values comma-separated; report average bitrate in kbps.
-- **Metadata sanitization:** Metadata strings (`albumArtist`, `album`, `title`, `codec`, `channelLabel`) written to `foo_dr.txt` and `Copy Results` sanitize ASCII control characters (`\r`, `\n`, `\t` → single space; other bytes `< 0x20` and `0x7F` stripped via `unsigned char` comparison so UTF-8 bytes `>= 0x80` are preserved untouched) and trim resulting leading/trailing ASCII spaces.
+- **Metadata sanitization:** Metadata strings (`albumArtist`, `album`, `title`, `codec`, `channelLabel`) written to `foo_dr.txt` and `Copy Results` sanitize ASCII control characters via `DrLogFormatter::sanitizeText()` (`\r`, `\n`, `\t` → single space; other bytes `< 0x20` and `0x7F` stripped via `unsigned char` comparison so UTF-8 bytes `>= 0x80` are preserved untouched) and trim resulting leading/trailing ASCII spaces.
 - For multi-album logs written to the same file/clipboard, concatenate album blocks separated by a blank line after `================================================================================`.
 
 ### 5.2. `Write Log` Behavior
-- **Single album:** Open `QFileDialog::getSaveFileName` defaulting to `<album_dir>/foo_dr.txt`.
+- **Single album:** Open `QFileDialog::getSaveFileName` defaulting to `<album_dir>/foo_dr.txt` (using the normalized `DrMeter/LogFileName`).
 - **Multiple albums:**
-  - Group album blocks by target directory.
-  - If multiple albums/discs share the same directory, concatenate their blocks into one `foo_dr.txt` so they do not overwrite each other.
-  - Show a single confirmation dialog listing all target `foo_dr.txt` paths (explicitly flagging any existing files that will be overwritten). Upon confirmation, write all files as UTF-8 and report the result.
+  - Group album blocks by target directory after normalizing `DrMeter/LogFileName` via `DrSettings::normalizeLogFileName()`.
+  - Albums without a valid absolute local directory (empty, relative, remote, virtual, or malformed archive paths) are skipped from automatic multi-directory planning instead of falling back to `QDir::currentPath()` (CWD).
+  - If multiple albums/discs share the same directory, concatenate their blocks into one log file so they do not overwrite each other.
+  - Show a single confirmation dialog listing all target log paths (explicitly flagging any existing files that will be overwritten). Upon confirmation, write all files atomically via `QSaveFile` as UTF-8, rejecting directory targets (`QFileInfo::isDir()`), and report successes and per-file errors.
 
 ---
 
@@ -161,6 +163,7 @@ Codec:             FLAC
 
 ### 6.1. Entry Point
 - Register `Dynamic Range Meter` action in the track selection context menu (`TrackSelectionController` / `ActionManager`, following `rgscanner`).
+- **Scan Filter:** Exclude non-local tracks (`!track.isRemote() && !track.isVirtual()`) both in selection validation (`hasScannableTracks`) and before launching `DrScanner::startScan()`.
 
 ### 6.2. Progress Dialog
 - Shows progress count (`3 / 7`), current track name, progress bar, and `Cancel` button.
@@ -173,6 +176,7 @@ Codec:             FLAC
     - `DR (FL)`, `DR (FR)`, ... (`12.92 dB`)
     - `RMS (FL)`, `RMS (FR)`, ... (`-20.16 dBFS`)
     - `Peak (FL)`, `Peak (FR)`, ... (`-1.92 dBFS` / `0.00 dBFS`)
+  - Both channel labels and failed-track `Name` values in `DrResultsModel` are sanitized with `DrLogFormatter::sanitizeText()` so table display and channel matching remain consistent with `DrLogFormatter::formatResultsTable()`.
 - **Bottom Bar:**
   - Left: `Measured in: M:SS.mmm, speed: XXXX.XXx` (wall-clock elapsed time and total audio duration / elapsed time ratio).
   - Right Buttons: `Update File Tags`, `Write Log`, `Copy Log`, `Copy Results`, `Close`.
@@ -183,6 +187,7 @@ Codec:             FLAC
 Settings are persisted in Fooyin's `SettingsManager` under the following keys and defaults:
 - `DrMeter/AlbumGroupingPattern`: `"%album artist% | %date% | %album% | %discnumber%"`
 - `DrMeter/LogFileName`: `"foo_dr.txt"`
+  - Validated and normalized via `DrSettings::normalizeLogFileName()` on read, write, and defensively in `DrLogExporter::planDirectoryLogWrites()`: after trimming whitespace, if the value is empty, `.`, `..`, or contains path separators (`/`, `\`), `:` (drive/URI), or ASCII control characters (`< 0x20` or `0x7F`), it falls back to `"foo_dr.txt"`.
 - `DrMeter/WriteAlbumDrForSingleTrack`: `true`
 
 Exposing these keys in Fooyin's settings UI via `GuiPluginContext::advancedSettingsRegistry` (`Tools / DR Meter`) is planned for v0.2.

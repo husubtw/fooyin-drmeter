@@ -8,6 +8,7 @@
 #include <core/engine/audioinput.h>
 #include <core/engine/audioloader.h>
 #include <core/library/musiclibrary.h>
+#include <core/scripting/scriptregistry.h>
 #include <core/track.h>
 #include <utils/settings/settingsmanager.h>
 
@@ -403,6 +404,59 @@ TEST(DrAlbumGrouperTest, GroupsByScriptPatternDiscNumberAndFallsBackToDirectory)
     EXPECT_EQ(parseTrackNumber(u" 12 / 14 "_s), 12);
     EXPECT_EQ(parseTrackNumber(u""_s), 0);
     EXPECT_EQ(parseTrackNumber(u"abc"_s), 0);
+}
+
+TEST(DrAlbumGrouperTest, HandlesArchiveRemoteVirtualMalformedAndPathlessTracksSafely)
+{
+    // 1. Valid unpack:// archive track resolves to the archive file's parent directory
+    const QString archivePath = u"/music/archives/album.zip"_s;
+    const QString archiveUrl  = u"unpack://zip|%1|file://%2!01.flac"_s.arg(archivePath.size()).arg(archivePath);
+    Track validArchive{archiveUrl};
+    validArchive.setAlbumArtists({u"Archive Artist"_s});
+    validArchive.setAlbum(u"Archive Album"_s);
+    ASSERT_TRUE(validArchive.isInArchive());
+
+    // 2. Malformed unpack:// (empty archive path) must not fall through to relative filepath()
+    Track malformedArchive{u"unpack://zip|0|file://!01.flac"_s};
+    malformedArchive.setAlbumArtists({u"Broken Archive Artist"_s});
+    malformedArchive.setAlbum(u"Broken Archive Album"_s);
+    ASSERT_TRUE(malformedArchive.isInArchive());
+    ASSERT_TRUE(malformedArchive.archivePath().isEmpty());
+
+    // 3. Remote track must yield empty directory
+    Track remote{u"https://example.com/music/01.flac"_s};
+    remote.setAlbumArtists({u"Remote Artist"_s});
+    remote.setAlbum(u"Remote Album"_s);
+    ASSERT_TRUE(remote.isRemote());
+
+    // 4. Virtual track (non-file, non-HTTP URI) must yield empty directory
+    Track virtualTrack{u"subsonic://server/track/42"_s};
+    virtualTrack.setAlbumArtists({u"Virtual Artist"_s});
+    virtualTrack.setAlbum(u"Virtual Album"_s);
+    ASSERT_TRUE(virtualTrack.isVirtual());
+
+    // 5. Group whose first track has no local path must inherit directory from second track
+    Track noPathFirst;
+    noPathFirst.setAlbumArtists({u"Mixed Artist"_s});
+    noPathFirst.setAlbum(u"Mixed Album"_s);
+    noPathFirst.setDate(u"2024"_s);
+
+    Track validSecond{u"/music/real_album/02.flac"_s};
+    validSecond.setAlbumArtists({u"Mixed Artist"_s});
+    validSecond.setAlbum(u"Mixed Album"_s);
+    validSecond.setDate(u"2024"_s);
+
+    const auto groups
+        = DrAlbumGrouper::groupTracks({validArchive, malformedArchive, remote, virtualTrack, noPathFirst, validSecond},
+                                      DrSettings::defaultAlbumGroupingPattern());
+
+    ASSERT_EQ(groups.size(), 5U);
+    EXPECT_EQ(groups[0].directory, u"/music/archives"_s);
+    EXPECT_TRUE(groups[1].directory.isEmpty());
+    EXPECT_TRUE(groups[2].directory.isEmpty());
+    EXPECT_TRUE(groups[3].directory.isEmpty());
+    EXPECT_EQ(groups[4].tracks.size(), 2U);
+    EXPECT_EQ(groups[4].directory, u"/music/real_album"_s);
 }
 
 TEST(DrTagWriterTest, EnforcesSafetyGuardsPreservesTagsAndReportsSummary)
@@ -1452,12 +1506,55 @@ TEST(DrSettingsTest, DefaultsEmptyFallbacksPersistenceAndSingleTrackAlbumDrToggl
     EXPECT_EQ(multiPrepared.tracksToWrite[0].extraTag(u"ALBUM DYNAMIC RANGE"_s), QStringList{u"12"_s});
     EXPECT_EQ(multiPrepared.tracksToWrite[1].extraTag(u"ALBUM DYNAMIC RANGE"_s), QStringList{u"12"_s});
 }
+
+TEST(DrSettingsTest, RejectsUnsafeLogFileNamesAndFallsBackToDefault)
+{
+    const QStringList unsafeNames{
+        u""_s,
+        u"   "_s,
+        u"."_s,
+        u".."_s,
+        u"/tmp/x.txt"_s,
+        u"../escape.txt"_s,
+        u"sub/foo_dr.txt"_s,
+        uR"(sub\foo_dr.txt)"_s,
+        u"C:foo_dr.txt"_s,
+        u"file:name.txt"_s,
+        u"foo\x01_dr.txt"_s,
+        u"foo\n_dr.txt"_s,
+        u"foo\t_dr.txt"_s,
+        u"foo\x7F_dr.txt"_s,
+    };
+
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    SettingsManager manager{tempDir.filePath(u"unsafe_settings.conf"_s)};
+    DrSettings settings{&manager};
+
+    for(const QString& unsafe : unsafeNames) {
+        EXPECT_EQ(DrSettings::normalizeLogFileName(unsafe), DrSettings::defaultLogFileName()) << unsafe.toStdString();
+
+        settings.setLogFileName(unsafe);
+        EXPECT_EQ(settings.logFileName(), DrSettings::defaultLogFileName()) << unsafe.toStdString();
+
+        // Also guard against direct edits in fooyin.conf bypassing setLogFileName()
+        manager.fileSet(QLatin1StringView{SettingKeys::LogFileName}, unsafe);
+        EXPECT_EQ(settings.logFileName(), DrSettings::defaultLogFileName()) << unsafe.toStdString();
+    }
+
+    EXPECT_EQ(DrSettings::normalizeLogFileName(u"  my_album_dr.txt  "_s), u"my_album_dr.txt"_s);
+    settings.setLogFileName(u"  my_album_dr.txt  "_s);
+    EXPECT_EQ(settings.logFileName(), u"my_album_dr.txt"_s);
+}
 } // namespace
 } // namespace Fooyin::DrMeter
 
 int main(int argc, char** argv)
 {
     QCoreApplication app{argc, argv};
+    Fooyin::ScriptRegistry::instance().finalise();
     ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
+    const int result = RUN_ALL_TESTS();
+    Fooyin::ScriptRegistry::instance().shutdown();
+    return result;
 }

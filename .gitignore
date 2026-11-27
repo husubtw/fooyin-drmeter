@@ -3,4 +3,6 @@ build-*/
 refs/
 .cache/
 compile_commands.json
+CMakeUserPresets.json
+repomix-output*.xml
 tests/fixtures/

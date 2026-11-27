@@ -26,7 +26,7 @@ cmake --build build-core && ctest --test-dir build-core --output-on-failure
 find src tests -type f \( -name '*.h' -o -name '*.cpp' \) -exec clang-format --dry-run --Werror {} +
 
 # Static analysis across src/ (requires `cmake --preset dev` for compile_commands.json)
-clang-tidy -p build src/core/*.cpp src/plugin/*.cpp
+clang-tidy -p build --warnings-as-errors='*' src/core/*.cpp src/plugin/*.cpp
 
 # Verify drmeter_core has zero Fooyin/Qt/FFmpeg dependencies
 nm -u build/libdrmeter_core.a | grep -iE 'fooyin|qt|qstring|avcodec|avformat' || echo "CLEAN"

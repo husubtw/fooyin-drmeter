@@ -1,3 +1,4 @@
+#include "core/drversion.h"
 #include "plugin/drlogexporter.h"
 #include "plugin/drresultsmodel.h"
 
@@ -13,6 +14,10 @@
 #include <locale>
 #include <string>
 #include <vector>
+
+#ifdef __unix__
+#include <unistd.h>
+#endif
 
 using namespace Qt::StringLiterals;
 
@@ -179,6 +184,77 @@ TEST(DrResultsModelTest, FormatsMeasurementFooterCLocale)
     EXPECT_EQ(formatMeasurementFooter(-50, 0.0), u"Measured in: 0:00.000, speed: 0.00x"_s);
 }
 
+TEST(DrResultsModelTest, SanitizesChannelLabelsAndFailedTrackNamesMatchingFormatter)
+{
+    ScannedAlbum album;
+    album.album.albumArtist = "Test Artist";
+    album.album.album       = "Sanitized Album";
+    album.album.officialDr  = 12;
+
+    ScannedTrack track1;
+    track1.ok                      = true;
+    track1.dr.trackDrInt           = 12;
+    track1.dr.metadata.trackNumber = 1;
+    track1.dr.metadata.title       = "Track\tOne\n\x07";
+    track1.dr.channels             = {
+        ChannelDrResult{"F\tL\n\x01", false, 12.10, -16.00, -1.00},
+        ChannelDrResult{"FR\rŞğüöç", false, 12.20, -16.10, -1.10},
+    };
+    album.tracks.push_back(track1);
+    album.album.tracks.push_back(track1.dr);
+
+    // Second track uses already-clean "F L" label; must deduplicate with track1's sanitized "F\tL\n\x01"
+    ScannedTrack track2;
+    track2.ok                      = true;
+    track2.dr.trackDrInt           = 13;
+    track2.dr.metadata.trackNumber = 2;
+    track2.dr.metadata.title       = "Track Two";
+    track2.dr.channels             = {
+        ChannelDrResult{"F L", false, 13.00, -17.00, -2.00},
+    };
+    album.tracks.push_back(track2);
+    album.album.tracks.push_back(track2.dr);
+
+    ScannedTrack failedTrack;
+    failedTrack.ok    = false;
+    failedTrack.error = u"Decode error"_s;
+    failedTrack.track = Track{u"/music/bad.flac"_s};
+    failedTrack.track.setTitle(u"Broken\r\nTrack\tŞğüöç\x1F"_s);
+    album.tracks.push_back(failedTrack);
+
+    DrResultsModel model{{album}};
+
+    // 3 base cols + 2 unique sanitized channels * 3 metrics = 9 cols
+    ASSERT_EQ(model.columnCount(), 9);
+    ASSERT_EQ(model.channelLabels().size(), 2U);
+    EXPECT_EQ(model.channelLabels()[0], "F L");
+    EXPECT_EQ(model.channelLabels()[1], "FR Şğüöç");
+
+    EXPECT_EQ(model.headerData(3, Qt::Horizontal).toString(), u"DR (F L)"_s);
+    EXPECT_EQ(model.headerData(4, Qt::Horizontal).toString(), u"DR (FR Şğüöç)"_s);
+    EXPECT_EQ(model.headerData(5, Qt::Horizontal).toString(), u"RMS (F L)"_s);
+    EXPECT_EQ(model.headerData(8, Qt::Horizontal).toString(), u"Peak (FR Şğüöç)"_s);
+
+    // Row 0 & Row 1 both resolve values under deduplicated "F L" channel column
+    EXPECT_EQ(model.data(model.index(0, 0)).toString(), u"01-Track One"_s);
+    EXPECT_EQ(model.data(model.index(0, 3)).toString(), u"12.10 dB"_s);
+    EXPECT_EQ(model.data(model.index(0, 4)).toString(), u"12.20 dB"_s);
+    EXPECT_EQ(model.data(model.index(1, 3)).toString(), u"13.00 dB"_s);
+    EXPECT_TRUE(model.data(model.index(1, 4)).toString().isEmpty());
+
+    // Row 2 (failed): control chars stripped/collapsed while preserving UTF-8
+    EXPECT_EQ(model.data(model.index(2, 0)).toString(), u"Broken Track Şğüöç"_s);
+    EXPECT_EQ(model.data(model.index(2, 1)).toString(), u"Error"_s);
+
+    // Verify parity with DrLogFormatter::formatResultsTable header
+    const std::string tsv = DrLogFormatter::formatResultsTable(std::span<const AlbumDrResult>{&album.album, 1});
+    const auto headerEnd  = tsv.find('\n');
+    ASSERT_NE(headerEnd, std::string::npos);
+    EXPECT_EQ(tsv.substr(0, headerEnd),
+              "Name\tTrack DR\tAlbum DR\tDR (F L)\tDR (FR Şğüöç)\tRMS (F L)\tRMS (FR Şğüöç)\tPeak (F L)\tPeak (FR "
+              "Şğüöç)");
+}
+
 TEST(DrLogExporterTest, GroupsMultiAlbumByDirectoryConcatenatesAndDetectsOverwrites)
 {
     QTemporaryDir tempDir;
@@ -214,7 +290,7 @@ TEST(DrLogExporterTest, GroupsMultiAlbumByDirectoryConcatenatesAndDetectsOverwri
     const QDateTime fixedTime      = QDateTime::fromString(u"2026-11-25 18:45:38"_s, u"yyyy-MM-dd HH:mm:ss"_s);
     const LogFormatOptions options = DrLogExporter::buildLogFormatOptions(fixedTime);
     EXPECT_EQ(options.logDate, "2026-11-25 18:45:38");
-    EXPECT_EQ(options.pluginVersion, "0.1.2");
+    EXPECT_EQ(options.pluginVersion, PluginVersion);
     EXPECT_FALSE(options.fooyinVersion.empty());
 
     const auto targets = DrLogExporter::planDirectoryLogWrites(allAlbums, u"foo_dr.txt"_s, options);
@@ -246,6 +322,109 @@ TEST(DrLogExporterTest, GroupsMultiAlbumByDirectoryConcatenatesAndDetectsOverwri
         const QByteArray bytes = f.readAll();
         EXPECT_EQ(std::string(bytes.constData(), static_cast<size_t>(bytes.size())), target.content);
     }
+}
+
+TEST(DrLogExporterTest, SanitizesUnsafeLogFileNamesAndRejectsDirectoryWrite)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString dirA = tempDir.filePath(u"album_a"_s);
+    const QString dirB = tempDir.filePath(u"album_b"_s);
+    ASSERT_TRUE(QDir{}.mkpath(dirA));
+    ASSERT_TRUE(QDir{}.mkpath(dirB));
+
+    const ScannedAlbum albumA      = makeValidAlbum(dirA, "Artist A", "Album A", 12, "Track A", 1);
+    const ScannedAlbum albumB      = makeValidAlbum(dirB, "Artist B", "Album B", 13, "Track B", 1);
+    const LogFormatOptions options = DrLogExporter::buildLogFormatOptions(
+        QDateTime::fromString(u"2026-11-25 18:45:38"_s, u"yyyy-MM-dd HH:mm:ss"_s));
+
+    const QStringList unsafeNames{
+        u"/tmp/x.txt"_s, u"../escape.txt"_s,   u"sub/foo_dr.txt"_s, uR"(sub\foo_dr.txt)"_s, u"."_s,
+        u".."_s,         u"bad\x01name.txt"_s,
+    };
+
+    for(const QString& unsafe : unsafeNames) {
+        const auto targets = DrLogExporter::planDirectoryLogWrites({albumA, albumB}, unsafe, options);
+        ASSERT_EQ(targets.size(), 2U) << unsafe.toStdString();
+        EXPECT_EQ(targets[0].filePath, QDir{dirA}.filePath(u"foo_dr.txt"_s)) << unsafe.toStdString();
+        EXPECT_EQ(targets[1].filePath, QDir{dirB}.filePath(u"foo_dr.txt"_s)) << unsafe.toStdString();
+
+        const LogWriteOutcome outcome = DrLogExporter::writePlannedLogs(targets);
+        EXPECT_EQ(outcome.writtenFiles, 2) << unsafe.toStdString();
+        EXPECT_EQ(outcome.failedFiles, 0) << unsafe.toStdString();
+    }
+
+    EXPECT_FALSE(QFileInfo::exists(tempDir.filePath(u"escape.txt"_s)));
+    EXPECT_FALSE(QFileInfo::exists(QDir{dirA}.filePath(u"sub"_s)));
+    EXPECT_FALSE(QFileInfo::exists(QDir{dirB}.filePath(u"sub"_s)));
+
+    // Direct write to an existing directory path must be rejected explicitly
+    QString dirErr;
+    EXPECT_FALSE(DrLogExporter::writeSingleLogFile(dirA, "test content", &dirErr));
+    EXPECT_FALSE(dirErr.isEmpty());
+}
+
+TEST(DrLogExporterTest, SkipsEmptyOrRelativeDirectoriesAndContinuesAfterUnwritableTarget)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString writableDir = tempDir.filePath(u"writable_album"_s);
+    ASSERT_TRUE(QDir{}.mkpath(writableDir));
+
+    // A regular file used as a fake parent directory reliably blocks mkpath even under root (e.g. Docker CI)
+    const QString blockingFile = tempDir.filePath(u"not_a_dir"_s);
+    {
+        QFile f{blockingFile};
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        f.write("block");
+    }
+    const QString blockedDir = QDir{blockingFile}.filePath(u"nested"_s);
+
+    const ScannedAlbum emptyDirAlbum    = makeValidAlbum(u""_s, "Artist E", "Empty Dir", 11, "T1", 1);
+    const ScannedAlbum relativeDirAlbum = makeValidAlbum(u"relative/album"_s, "Artist R", "Relative Dir", 12, "T2", 1);
+    const ScannedAlbum blockedAlbum     = makeValidAlbum(blockedDir, "Artist B", "Blocked Dir", 13, "T3", 1);
+    const ScannedAlbum writableAlbum    = makeValidAlbum(writableDir, "Artist W", "Writable Dir", 14, "T4", 1);
+
+    const LogFormatOptions options = DrLogExporter::buildLogFormatOptions(
+        QDateTime::fromString(u"2026-11-25 18:45:38"_s, u"yyyy-MM-dd HH:mm:ss"_s));
+
+    std::vector<ScannedAlbum> inputs{emptyDirAlbum, relativeDirAlbum, blockedAlbum, writableAlbum};
+    size_t expectedTargets = 2U;
+    int expectedFailed     = 1;
+
+    QString readOnlyDir;
+#ifdef __unix__
+    const bool canTestReadOnlyDir = (::geteuid() != 0);
+    if(canTestReadOnlyDir) {
+        readOnlyDir = tempDir.filePath(u"readonly_album"_s);
+        ASSERT_TRUE(QDir{}.mkpath(readOnlyDir));
+        ASSERT_TRUE(QFile::setPermissions(readOnlyDir, QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+        inputs.push_back(makeValidAlbum(readOnlyDir, "Artist RO", "ReadOnly Dir", 10, "T5", 1));
+        ++expectedTargets;
+        ++expectedFailed;
+    }
+#endif
+
+    const auto targets = DrLogExporter::planDirectoryLogWrites(inputs, u"foo_dr.txt"_s, options);
+    ASSERT_EQ(targets.size(), expectedTargets);
+    EXPECT_EQ(targets[0].directory, QDir::cleanPath(blockedDir));
+    EXPECT_EQ(targets[1].directory, QDir::cleanPath(writableDir));
+
+    const LogWriteOutcome outcome = DrLogExporter::writePlannedLogs(targets);
+    EXPECT_EQ(outcome.writtenFiles, 1);
+    EXPECT_EQ(outcome.failedFiles, expectedFailed);
+    EXPECT_EQ(outcome.errors.size(), expectedFailed);
+    ASSERT_EQ(outcome.writtenPaths.size(), 1);
+    EXPECT_EQ(outcome.writtenPaths[0], QDir{writableDir}.filePath(u"foo_dr.txt"_s));
+    EXPECT_TRUE(QFileInfo::exists(outcome.writtenPaths[0]));
+
+#ifdef __unix__
+    if(!readOnlyDir.isEmpty()) {
+        QFile::setPermissions(readOnlyDir, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    }
+#endif
 }
 } // namespace
 } // namespace Fooyin::DrMeter

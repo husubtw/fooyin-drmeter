@@ -7,6 +7,8 @@ project(
     LANGUAGES CXX
 )
 
+set(FOOYIN_MIN_VERSION "0.15.1")
+
 option(DRMETER_BUILD_PLUGIN "Build Fooyin plugin targets" ON)
 option(DRMETER_PACKAGE_BUNDLE "Add package_plugin target for .fyplugin bundle" OFF)
 option(BUILD_TESTING "Build unit and integration tests" OFF)
@@ -14,8 +16,14 @@ option(BUILD_TESTING "Build unit and integration tests" OFF)
 include(CTest)
 
 if(DRMETER_BUILD_PLUGIN)
-    find_package(Fooyin 0.15.1 REQUIRED)
+    find_package(Fooyin ${FOOYIN_MIN_VERSION} REQUIRED)
 endif()
+
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/core/drversion.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/core/drversion.h"
+    @ONLY
+)
 
 add_library(
     drmeter_core
@@ -28,7 +36,12 @@ add_library(
 )
 
 target_compile_features(drmeter_core PUBLIC cxx_std_23)
-target_include_directories(drmeter_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(
+    drmeter_core
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_BINARY_DIR}/generated"
+)
 set_target_properties(
     drmeter_core
     PROPERTIES
@@ -66,7 +79,6 @@ if(DRMETER_BUILD_PLUGIN)
             QT_USE_QSTRINGBUILDER
         PRIVATE
             FOOYIN_SDK_VERSION="${Fooyin_VERSION}"
-            DRMETER_PLUGIN_VERSION="${PROJECT_VERSION}"
     )
     target_link_libraries(
         drmeter_plugin_logic

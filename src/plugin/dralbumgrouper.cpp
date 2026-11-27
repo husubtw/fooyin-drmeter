@@ -4,7 +4,6 @@
 
 #include <core/scripting/scriptparser.h>
 
-#include <QDir>
 #include <QFileInfo>
 
 #include <unordered_map>
@@ -13,19 +12,17 @@ namespace Fooyin::DrMeter {
 namespace {
 QString trackParentDirectory(const Track& track)
 {
-    if(track.isInArchive()) {
-        const QString archivePath = track.archivePath();
-        if(!archivePath.isEmpty()) {
-            return QFileInfo{archivePath}.absolutePath();
-        }
+    if(track.isRemote() || track.isVirtual()) {
+        return {};
     }
 
-    const QString filepath = track.filepath();
-    if(!filepath.isEmpty()) {
-        return QFileInfo{filepath}.absolutePath();
+    const QString path = track.isInArchive() ? track.archivePath() : track.filepath();
+    if(path.isEmpty()) {
+        return {};
     }
 
-    return QDir::currentPath();
+    const QFileInfo info{path};
+    return info.isAbsolute() ? info.absolutePath() : QString{};
 }
 } // namespace
 

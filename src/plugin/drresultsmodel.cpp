@@ -41,14 +41,16 @@ DrResultsModel::DrResultsModel(const std::vector<ScannedAlbum>& albums, QObject*
                 row.trackDr  = scanned.dr.trackDrInt;
                 row.channels = scanned.dr.channels;
 
-                for(const auto& ch : scanned.dr.channels) {
+                for(auto& ch : row.channels) {
+                    ch.channelLabel = DrLogFormatter::sanitizeText(ch.channelLabel);
                     if(std::ranges::find(m_channelLabels, ch.channelLabel) == m_channelLabels.end()) {
                         m_channelLabels.push_back(ch.channelLabel);
                     }
                 }
             }
             else {
-                row.name = scanned.track.effectiveTitle();
+                row.name = QString::fromStdString(
+                    DrLogFormatter::sanitizeText(scanned.track.effectiveTitle().toStdString()));
             }
 
             m_rows.push_back(std::move(row));

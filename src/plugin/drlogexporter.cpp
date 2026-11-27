@@ -1,5 +1,6 @@
 #include "plugin/drlogexporter.h"
 
+#include "core/drversion.h"
 #include "plugin/drsettings.h"
 
 #include <QCoreApplication>
@@ -12,20 +13,17 @@
 
 using namespace Qt::StringLiterals;
 
-#ifndef FOOYIN_SDK_VERSION
-#define FOOYIN_SDK_VERSION "0.15.1"
-#endif
-
-#ifndef DRMETER_PLUGIN_VERSION
-#define DRMETER_PLUGIN_VERSION "0.1.2"
-#endif
-
 namespace Fooyin::DrMeter {
 LogFormatOptions DrLogExporter::buildLogFormatOptions(const QDateTime& timestamp)
 {
     QString fooyinVer = QCoreApplication::applicationVersion().trimmed();
     if(fooyinVer.isEmpty()) {
-        fooyinVer = QString::fromLatin1(FOOYIN_SDK_VERSION);
+#ifdef FOOYIN_SDK_VERSION
+        fooyinVer = QString::fromLatin1(FOOYIN_SDK_VERSION).trimmed();
+#endif
+        if(fooyinVer.isEmpty()) {
+            fooyinVer = QString::fromUtf8(MinFooyinVersion.data(), static_cast<qsizetype>(MinFooyinVersion.size()));
+        }
     }
 
     const QDateTime effectiveTime = timestamp.isValid() ? timestamp : QDateTime::currentDateTime();
@@ -33,7 +31,7 @@ LogFormatOptions DrLogExporter::buildLogFormatOptions(const QDateTime& timestamp
 
     return LogFormatOptions{
         .fooyinVersion = fooyinVer.toStdString(),
-        .pluginVersion = std::string{DRMETER_PLUGIN_VERSION},
+        .pluginVersion = std::string{PluginVersion},
         .logDate       = formattedDate.toStdString(),
     };
 }
@@ -56,8 +54,7 @@ std::vector<LogWriteTarget> DrLogExporter::planDirectoryLogWrites(const std::vec
                                                                   const QString& logFileName,
                                                                   const LogFormatOptions& options)
 {
-    const QString effectiveName
-        = logFileName.trimmed().isEmpty() ? DrSettings::defaultLogFileName() : logFileName.trimmed();
+    const QString effectiveName = DrSettings::normalizeLogFileName(logFileName);
 
     std::vector<LogWriteTarget> targets;
     std::unordered_map<QString, size_t> targetIndexByDir;
@@ -67,8 +64,11 @@ std::vector<LogWriteTarget> DrLogExporter::planDirectoryLogWrites(const std::vec
             continue;
         }
 
-        const QString cleanDir
-            = scanned.directory.trimmed().isEmpty() ? QDir::currentPath() : QDir::cleanPath(scanned.directory);
+        const QString trimmedDir = scanned.directory.trimmed();
+        if(trimmedDir.isEmpty() || !QFileInfo{trimmedDir}.isAbsolute()) {
+            continue;
+        }
+        const QString cleanDir = QDir::cleanPath(trimmedDir);
 
         const auto it = targetIndexByDir.find(cleanDir);
         if(it == targetIndexByDir.end()) {
@@ -97,6 +97,13 @@ std::vector<LogWriteTarget> DrLogExporter::planDirectoryLogWrites(const std::vec
 bool DrLogExporter::writeSingleLogFile(const QString& filePath, const std::string& content, QString* errorOut)
 {
     const QFileInfo info{filePath};
+    if(info.isDir()) {
+        if(errorOut) {
+            *errorOut = u"%1: Target path is a directory"_s.arg(filePath);
+        }
+        return false;
+    }
+
     const QDir parentDir = info.absoluteDir();
     if(!parentDir.exists() && !parentDir.mkpath(u"."_s)) {
         if(errorOut) {

@@ -23,9 +23,14 @@ namespace Fooyin::DrMeter {
 namespace {
 constexpr auto MeasureActionId = "DrMeter.MeasureDynamicRange";
 
+bool isScannableTrack(const Track& track)
+{
+    return !track.isRemote() && !track.isVirtual();
+}
+
 bool hasScannableTracks(const TrackSelection& selection)
 {
-    return std::ranges::any_of(selection.tracks, [](const Track& track) { return !track.isRemote(); });
+    return std::ranges::any_of(selection.tracks, isScannableTrack);
 }
 } // namespace
 
@@ -125,7 +130,7 @@ void DrMeterPlugin::startDynamicRangeScan()
 
     TrackList tracksToScan;
     for(const Track& track : m_selectionController->selectedTracks()) {
-        if(!track.isRemote()) {
+        if(isScannableTrack(track)) {
             tracksToScan.push_back(track);
         }
     }

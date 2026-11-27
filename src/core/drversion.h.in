@@ -1,0 +1,8 @@
+#pragma once
+
+#include <string_view>
+
+namespace Fooyin::DrMeter {
+inline constexpr std::string_view PluginVersion    = "@PROJECT_VERSION@";
+inline constexpr std::string_view MinFooyinVersion = "@FOOYIN_MIN_VERSION@";
+} // namespace Fooyin::DrMeter

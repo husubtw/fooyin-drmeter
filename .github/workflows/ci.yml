@@ -39,6 +39,13 @@ jobs:
           cmake --build --preset asan
           ctest --preset asan --output-on-failure
 
+      - name: Run core tests with LeakSanitizer (LSan)
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          ./build-asan/drmeter_core_tests
+
       - name: Run clang-tidy
         run: |
           clang-tidy -p build --warnings-as-errors='*' src/core/*.cpp src/plugin/*.cpp
