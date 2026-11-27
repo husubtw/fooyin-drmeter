@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-27
+
+### Added
+- Fooyin `Settings → Advanced → Tools → DR Meter` settings UI via `AdvancedSettingsRegistry` (`Album grouping pattern`, `Log file name`, `Verbose results dialog`, `Write ALBUM DYNAMIC RANGE for single-track albums`).
+- `DrMeter/VerboseDialog` toggle to switch `DrResultsDialog` between compact 3-column and full per-channel views.
+- Tri-state numeric column sorting (`Ascending → Descending → Original scan order`) in `DrResultsDialog` with `Error` rows and empty channel cells pinned to the bottom.
+- `Ctrl+C` and table context-menu `Copy` for selected rows (TSV in visible order), and order-aware `Copy Results`.
+- Single-source generated `core/drversion.h` header from CMake `PROJECT_VERSION` and `FOOYIN_MIN_VERSION`.
+- GitHub Release workflow (`.github/workflows/release.yml`) publishing explicitly ABI-tagged Ubuntu 24.04 (`Fooyin 0.15.1` / `Qt 6.4`) `.fyplugin` bundles and `SHA256SUMS.txt`.
+- LeakSanitizer check for standalone `drmeter_core_tests` in Arch CI.
+
+### Fixed
+- `DrSettings` / `DrLogExporter`: reject path separators, `:`, `.`, `..`, and control characters in `DrMeter/LogFileName` and refuse directory targets in `writeSingleLogFile()`.
+- `DrAlbumGrouper` / `DrLogExporter`: prevent remote, virtual, malformed archive, or empty paths from falling back to `QDir::currentPath()` during multi-album log export; filter out `Track::isVirtual()` tracks before scanning.
+- `DrResultsModel`: sanitize channel labels and failed track names consistently with `DrLogFormatter::sanitizeText()`.
+
 ## [0.1.2] - 2026-11-26
 
 ### Added
@@ -53,7 +69,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-threaded offline `DrScanner` supporting standard lossless/lossy PCM, sample-exact CUE subsong slicing, and DSF/DSD64 decoding via Fooyin's `AudioLoader`.
 - `DrResultsDialog`, `DrProgressDialog`, multi-album directory log export (`DrLogExporter`), and safe `DYNAMIC RANGE` / `ALBUM DYNAMIC RANGE` tag writing (`DrTagWriter`).
 
-[Unreleased]: https://github.com/husubtw/fooyin-drmeter/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/husubtw/fooyin-drmeter/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/husubtw/fooyin-drmeter/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/husubtw/fooyin-drmeter/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/husubtw/fooyin-drmeter/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/husubtw/fooyin-drmeter/releases/tag/v0.1.0
