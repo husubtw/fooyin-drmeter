@@ -190,7 +190,7 @@ Codec:             FLAC
 ---
 
 ## 7. Settings (`DrSettings`)
-Settings are persisted in Fooyin's `SettingsManager` (`fileValue()` / `fileSet()`) and exposed in Fooyin's **Preferences → Advanced → Tools → DR Meter** via `GuiPluginContext::advancedSettingsRegistry` under the following keys and defaults:
+Settings are persisted in Fooyin's `SettingsManager` (`fileValue()` / `fileSet()`) and exposed in Fooyin's **Settings → Advanced → Tools → DR Meter** via `GuiPluginContext::advancedSettingsRegistry` under the following keys and defaults:
 - `DrMeter/AlbumGroupingPattern`: `"%album artist% | %date% | %album% | %discnumber%"` (`LineEdit`, trims whitespace and reverts empty values to default)
 - `DrMeter/LogFileName`: `"foo_dr.txt"` (`LineEdit`)
   - Validated (`DrSettings::validateLogFileName()`) in the Advanced settings UI and normalized (`DrSettings::normalizeLogFileName()`) on read, write, and defensively in `DrLogExporter::planDirectoryLogWrites()`: after trimming whitespace, empty values revert to `"foo_dr.txt"`, and `.`, `..`, path separators (`/`, `\`), `:` (drive/URI), or ASCII control characters (`< 0x20` or `0x7F`) are rejected in UI validation and safely fall back to `"foo_dr.txt"`.
@@ -201,4 +201,4 @@ Settings are persisted in Fooyin's `SettingsManager` (`fileValue()` / `fileSet()
 
 ## 8. Release & Plugin ABI Policy
 - `.github/workflows/release.yml` builds and attaches a prebuilt `.fyplugin` bundle (`fooyin-drmeter-<tag>-ubuntu24.04-fooyin0.15.1-qt6.4-x64.fyplugin`) and `SHA256SUMS.txt` on pushed `v*` tags using the verified Fooyin `0.15.1` Ubuntu 24.04 Linux SDK.
-- Because Fooyin plugins are native C++ binaries bound to the Fooyin plugin IID and Qt 6 ABI, the prebuilt release bundle targets **Ubuntu 24.04 / Fooyin 0.15.1 / Qt 6.4 (`x86_64`)** only and is incompatible with Arch Linux, Fedora, or Flatpak (those environments must build from source or install via AUR).
+- Because Fooyin plugins are native C++ binaries bound to the Fooyin plugin IID and Qt 6 ABI, the prebuilt release bundle targets **Ubuntu 24.04 / Fooyin 0.15.1 / Qt 6.4 (`x86_64`)** only and is incompatible with Arch Linux, Fedora, or Flatpak (those environments must build from source).

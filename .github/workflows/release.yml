@@ -67,4 +67,4 @@ jobs:
           body: |
             > [!IMPORTANT]
             > **ABI Compatibility Notice:** The attached `.fyplugin` bundle is built strictly for the **Ubuntu 24.04 / Fooyin 0.15.1 / Qt 6.4 (`x86_64`)** ABI.
-            > It will **not** load on Arch Linux, Fedora, or Flatpak — on those systems, please build from source (or install via AUR on Arch Linux) as documented in the [README](https://github.com/husubtw/fooyin-drmeter#build--install).
+            > It will **not** load on Arch Linux, Fedora, or Flatpak — on those systems, please build from source as documented in the [README](https://github.com/husubtw/fooyin-drmeter#build--install).
